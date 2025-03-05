@@ -309,7 +309,10 @@ def main(args, resume_preempt=False):
                     z = predictor(z, masks_enc, masks_pred)
                     return z
 
-                loss_fn = get_loss_function(loss)
+                def loss_fn(z, h):
+                    loss = F.smooth_l1_loss(z, h)
+                    loss = AllReduce.apply(loss)
+                    return loss
 
                 # Step 1. Forward
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
