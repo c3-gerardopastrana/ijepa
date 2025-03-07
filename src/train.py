@@ -121,7 +121,7 @@ def main(args, resume_preempt=False):
     start_lr = args['optimization']['start_lr']
     lr = args['optimization']['lr']
     final_lr = args['optimization']['final_lr']
-    loss =  args['optimization']['loss']
+    loss_type =  args['optimization']['loss']
 
     # -- LOGGING
     folder = args['logging']['folder']
@@ -310,7 +310,7 @@ def main(args, resume_preempt=False):
                     z = predictor(z, masks_enc, masks_pred)
                     return z
 
-                loss_fn = get_loss_function(loss, batch_size, num_target, num_context)
+                loss_fn = get_loss_function(loss_type, batch_size,  num_pred_masks, num_enc_masks)
 
                 # Step 1. Forward
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):

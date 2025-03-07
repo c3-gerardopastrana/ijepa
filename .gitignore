@@ -2,3 +2,6 @@
 *.swo
 __pycache__
 .ipynb_checkpoints/
+venv/
+experiments/
+imagenet_full_size/
