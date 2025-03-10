@@ -21,7 +21,7 @@ def get_lidar_matrices(
     del_sigma_augs: float = 1e-6
 ):
    
-    activations_arr = activations.to(torch.float32)
+    activations_arr = activations
 
     if activations_arr.shape[0] == num_samples * num_augs:
         activations_arr = activations_arr.reshape(num_samples, num_augs, -1)
@@ -46,15 +46,12 @@ def get_lidar_matrices(
     ).mean(dim=0)
     
     # Add small identity matrix to ensure invertibility
-    sigma_w += del_sigma_augs * torch.eye(sigma_w.shape[0], device=sigma_w.device, dtype=torch.float32)
+    sigma_w += del_sigma_augs * torch.eye(sigma_w.shape[0], device=sigma_w.device)
 
-    # Ensure sigma_w is float32
-    sigma_w = sigma_w.to(torch.float32)
-    
     return sigma_b, sigma_w
 
 
-def sina(z, h, num_samples, num_augs, del_sigma_augs: float = 1e-6):
+def sina(z, h, num_samples, num_augs, del_sigma_augs: float = 1e-1):
     """
     This function calculates the Frobenius norm of the lidar matrix divided by the trace.
     The Frobenius norm is equivalent to calulating the trace of B^-1AB^-1A where:
@@ -62,16 +59,26 @@ def sina(z, h, num_samples, num_augs, del_sigma_augs: float = 1e-6):
     - A is sigma_b (covariance matrix of the signal),
     The trace is equivalent to the trace of B^-1A.
     """
-    
+    print(z.size())
     sigma_b, sigma_w = get_lidar_matrices(z, num_samples, num_augs, del_sigma_augs)
-    sigma_w_inv = torch.inverse(sigma_w)
-    lidar_matrix = sigma_w_inv @ sigma_b
-    frobenius_norm = torch.trace(lidar_matrix @ lidar_matrix).sqrt()
-    trace = torch.trace(lidar_matrix)
-    loss = frobenius_norm / trace if trace != 0 else 0
+    epsilon = 1e-8 
 
+    # Convert to float32 to invert
+    sigma_w = sigma_w.to(torch.float32)
+    sigma_b = sigma_b.to(torch.float32)
+    sigma_b = AllReduce.apply(sigma_b)
+    sigma_w = AllReduce.apply(sigma_w)
+
+    # loss
+    sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b)
+    frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b).sqrt()
+    trace = torch.trace(sigma_w_inv_b)
+    loss = (frobenius_norm / (trace + epsilon)).to(z.dtype)
+    loss = AllReduce.apply(loss)
+    print("rankkkkk", torch.linalg.matrix_rank(sigma_w), sigma_w.size())
+    
+    
     return loss
-
 
 def get_loss_function(loss_name, batch_size=None, num_target=None, num_context=None):
     loss_functions = {

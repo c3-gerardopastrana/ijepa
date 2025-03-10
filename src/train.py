@@ -316,6 +316,7 @@ def main(args, resume_preempt=False):
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
                     h = forward_target()
                     z = forward_context()
+                    #torch.cuda.empty_cache()
                     loss = loss_fn(z, h)
 
                 #  Step 2. Backward & step

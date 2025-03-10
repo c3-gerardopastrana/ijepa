@@ -13,7 +13,7 @@ data:
   use_gaussian_blur: false
   use_horizontal_flip: false
 logging:
-  folder: experiments/vittiny-ep.3/
+  folder: experiments/vitt14_ep300_jepa/
   write_tag: jepa
 mask:
   allow_overlap: false
@@ -24,8 +24,8 @@ mask:
   - 0.85
   - 1.0
   min_keep: 10
-  num_enc_masks: 3
-  num_pred_masks: 1
+  num_enc_masks: 1
+  num_pred_masks: 4
   patch_size: 14
   pred_mask_scale:
   - 0.15
@@ -42,7 +42,7 @@ optimization:
   ema:
   - 0.996
   - 1.0
-  epochs: 3
+  epochs: 300
   final_lr: 1.0e-06
   final_weight_decay: 0.4
   ipe_scale: 1.0
@@ -50,4 +50,4 @@ optimization:
   start_lr: 0.0002
   warmup: 40
   weight_decay: 0.04
-  loss: "sina"
+  loss: "jepa"

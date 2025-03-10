@@ -11,6 +11,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint
 
 from src.utils.tensors import (
     trunc_normal_,
@@ -345,12 +346,14 @@ class VisionTransformer(nn.Module):
         attn_drop_rate=0.0,
         drop_path_rate=0.0,
         norm_layer=nn.LayerNorm,
+        use_checkpoint=False,
         init_std=0.02,
         **kwargs
     ):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
         self.num_heads = num_heads
+        self.use_checkpoint = use_checkpoint
         # --
         self.patch_embed = PatchEmbed(
             img_size=img_size[0],
@@ -417,7 +420,10 @@ class VisionTransformer(nn.Module):
 
         # -- fwd prop
         for i, blk in enumerate(self.blocks):
-            x = blk(x)
+            if self.use_checkpoint:  # <-- Apply checkpointing if enabled
+                x = checkpoint.checkpoint(blk, x)
+            else:
+                x = blk(x)
 
         if self.norm is not None:
             x = self.norm(x)
@@ -451,7 +457,7 @@ def vit_predictor(**kwargs):
 def vit_tiny(patch_size=16, **kwargs):
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), use_checkpoint=True, **kwargs)
     return model
 
 
