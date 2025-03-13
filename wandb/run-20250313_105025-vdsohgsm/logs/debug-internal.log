@@ -1,7 +1,0 @@
-{"time":"2025-03-13T10:50:25.448597566-07:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/workspace/Lidar/ijepa/wandb/run-20250313_105025-vdsohgsm/logs/debug-core.log"}
-{"time":"2025-03-13T10:50:25.551435273-07:00","level":"INFO","msg":"created new stream","id":"vdsohgsm"}
-{"time":"2025-03-13T10:50:25.55148539-07:00","level":"INFO","msg":"stream: started","id":"vdsohgsm"}
-{"time":"2025-03-13T10:50:25.551527248-07:00","level":"INFO","msg":"writer: Do: started","stream_id":"vdsohgsm"}
-{"time":"2025-03-13T10:50:25.551542418-07:00","level":"INFO","msg":"sender: started","stream_id":"vdsohgsm"}
-{"time":"2025-03-13T10:50:25.551643033-07:00","level":"INFO","msg":"handler: started","stream_id":"vdsohgsm"}
-{"time":"2025-03-13T10:50:25.887522825-07:00","level":"INFO","msg":"Starting system monitor"}
