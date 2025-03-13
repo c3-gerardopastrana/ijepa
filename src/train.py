@@ -21,6 +21,7 @@ import copy
 import logging
 import sys
 import yaml
+import wandb
 
 import numpy as np
 
@@ -48,7 +49,7 @@ from src.helper import (
     init_model,
     init_opt)
 from src.transforms import make_transforms
-from src.losses import get_loss_function
+from src.losses import LossFunctions
 
 # --
 log_timings = True
@@ -63,6 +64,13 @@ torch.backends.cudnn.benchmark = True
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
+
+def init_wandb(args):
+    wandb.init(
+        project="SSL",
+        entity="gerardo-pastrana-c3-ai",
+        config=args
+    )
 
 
 def main(args, resume_preempt=False):
@@ -122,6 +130,8 @@ def main(args, resume_preempt=False):
     lr = args['optimization']['lr']
     final_lr = args['optimization']['final_lr']
     loss_type =  args['optimization']['loss']
+    grad_clip_value = args['optimization']['grad_clip_value']
+    use_lars = args['optimization']['use_lars']
 
     # -- LOGGING
     folder = args['logging']['folder']
@@ -161,6 +171,11 @@ def main(args, resume_preempt=False):
                            ('%.5f', 'mask-B'),
                            ('%d', 'time (ms)'))
 
+
+    # -- Initialize W&B
+    init_wandb(args)
+
+    
     # -- init model
     encoder, predictor = init_model(
         device=device,
@@ -170,6 +185,7 @@ def main(args, resume_preempt=False):
         pred_emb_dim=pred_emb_dim,
         model_name=model_name)
     target_encoder = copy.deepcopy(encoder)
+    loss_class = LossFunctions(batch_size,  num_pred_masks, num_enc_masks)
 
     # -- make data transforms
     mask_collator = MBMaskCollator(
@@ -220,7 +236,8 @@ def main(args, resume_preempt=False):
         warmup=warmup,
         num_epochs=num_epochs,
         ipe_scale=ipe_scale,
-        use_bfloat16=use_bfloat16)
+        use_bfloat16=use_bfloat16,
+        use_lars=use_lars)
     encoder = DistributedDataParallel(encoder, static_graph=True)
     predictor = DistributedDataParallel(predictor, static_graph=True)
     target_encoder = DistributedDataParallel(target_encoder)
@@ -267,6 +284,7 @@ def main(args, resume_preempt=False):
                 torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
     # -- TRAINING LOOP
+    torch.autograd.set_detect_anomaly(True)
     for epoch in range(start_epoch, num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
 
@@ -309,23 +327,28 @@ def main(args, resume_preempt=False):
                     z = encoder(imgs, masks_enc)
                     z = predictor(z, masks_enc, masks_pred)
                     return z
-
-                loss_fn = get_loss_function(loss_type, batch_size,  num_pred_masks, num_enc_masks)
+                
+                loss_fn = loss_class.get_loss_function(loss_type)
 
                 # Step 1. Forward
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
                     h = forward_target()
                     z = forward_context()
-                    #torch.cuda.empty_cache()
+                    torch.cuda.empty_cache()
                     loss = loss_fn(z, h)
 
                 #  Step 2. Backward & step
                 if use_bfloat16:
                     scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)  # Unscale gradients before clipping
+                    torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
+                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
+                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     optimizer.step()
                 grad_stats = grad_logger(encoder.named_parameters())
                 optimizer.zero_grad()
@@ -336,10 +359,11 @@ def main(args, resume_preempt=False):
                     for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
                         param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
 
-                return (float(loss), _new_lr, _new_wd, grad_stats)
-            (loss, _new_lr, _new_wd, grad_stats), etime = gpu_timer(train_step)
+                return (float(loss), _new_lr, _new_wd, grad_stats, z)
+            (loss, _new_lr, _new_wd, grad_stats, z), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
+
 
             # -- Logging
             def log_stats():
@@ -358,6 +382,25 @@ def main(args, resume_preempt=False):
                                    _new_lr,
                                    torch.cuda.max_memory_allocated() / 1024.**2,
                                    time_meter.avg))
+                    
+                    # Lidar metrics
+                    metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+
+                    # Log to wandb
+                    wandb.log({
+                        'epoch': epoch + 1,
+                        'iteration': itr,
+                        'loss': loss,
+                        'weight decay': _new_wd,
+                        'learning rate': _new_lr,
+                        "grad_norm_avg": grad_stats.avg,
+                        "grad_norm_max": grad_stats.max,
+                        "grad_norm_min": grad_stats.min,
+                        "grad_norm_first_layer": grad_stats.first_layer,
+                        "grad_norm_last_layer": grad_stats.last_layer
+
+                    })
+                    wandb.log(metrics_dictionary)
 
                     if grad_stats is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
@@ -366,13 +409,24 @@ def main(args, resume_preempt=False):
                                        grad_stats.last_layer,
                                        grad_stats.min,
                                        grad_stats.max))
-
+                    
+                   
+                        
+                        
+                        
+                        
             log_stats()
 
             assert not np.isnan(loss), 'loss is nan'
 
         # -- Save Checkpoint after every epoch
-        logger.info('avg. loss %.3f' % loss_meter.avg)
+        logger.info(
+            'Epoch %d Summary: avg. loss: %.3f'
+            % (epoch + 1, 
+               loss_meter.avg
+               )
+        )
+
         save_checkpoint(epoch+1)
 
 

@@ -1,0 +1,7 @@
+{"time":"2025-03-13T10:50:25.439695883-07:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/workspace/Lidar/ijepa/wandb/run-20250313_105025-uslo9jd5/logs/debug-core.log"}
+{"time":"2025-03-13T10:50:25.542571479-07:00","level":"INFO","msg":"created new stream","id":"uslo9jd5"}
+{"time":"2025-03-13T10:50:25.542612471-07:00","level":"INFO","msg":"stream: started","id":"uslo9jd5"}
+{"time":"2025-03-13T10:50:25.542655946-07:00","level":"INFO","msg":"writer: Do: started","stream_id":"uslo9jd5"}
+{"time":"2025-03-13T10:50:25.542668711-07:00","level":"INFO","msg":"sender: started","stream_id":"uslo9jd5"}
+{"time":"2025-03-13T10:50:25.54270294-07:00","level":"INFO","msg":"handler: started","stream_id":"uslo9jd5"}
+{"time":"2025-03-13T10:50:25.801908254-07:00","level":"INFO","msg":"Starting system monitor"}

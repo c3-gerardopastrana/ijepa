@@ -1,0 +1,69 @@
+{
+  "os": "Linux-5.15.146+-x86_64-with-glibc2.31",
+  "python": "CPython 3.11.4",
+  "startedAt": "2025-03-13T17:50:25.430103Z",
+  "args": [
+    "--fname",
+    "configs/ink1k_vitt14_ep50_sina.yaml",
+    "--devices",
+    "cuda:0",
+    "cuda:1",
+    "cuda:2",
+    "cuda:3"
+  ],
+  "program": "/workspace/Lidar/ijepa/main.py",
+  "codePath": "main.py",
+  "git": {
+    "remote": "https://github.com/c3-gerardopastrana/ijepa.git",
+    "commit": "c44c3a00f844779b9d2a6517885cc6568c211471"
+  },
+  "email": "gerardo.pastrana@c3.ai",
+  "root": "/workspace/Lidar/ijepa",
+  "host": "finetuning-80gb-4-5-59d4d9d89f-wh5kr",
+  "executable": "/workspace/Lidar/ijepa/venv/bin/python",
+  "codePathLocal": "main.py",
+  "cpu_count": 48,
+  "cpu_count_logical": 96,
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "gpu_count": 4,
+  "disk": {
+    "/": {
+      "total": "3168432029696",
+      "used": "972949037056"
+    }
+  },
+  "memory": {
+    "total": "1437341159424"
+  },
+  "cpu": {
+    "count": 48,
+    "countLogical": 96
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA A100-SXM4-80GB",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A100-SXM4-80GB",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A100-SXM4-80GB",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere"
+    },
+    {
+      "name": "NVIDIA A100-SXM4-80GB",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere"
+    }
+  ],
+  "cudaVersion": "12.4"
+}

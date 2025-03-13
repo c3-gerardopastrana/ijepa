@@ -5,3 +5,4 @@ __pycache__
 venv/
 experiments/
 imagenet_full_size/
+wandb/

@@ -1,0 +1,8 @@
+{"time":"2025-03-12T16:29:48.119892249-07:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/workspace/Lidar/ijepa/wandb/run-20250312_162948-mle57dgf/logs/debug-core.log"}
+{"time":"2025-03-12T16:29:48.223717413-07:00","level":"INFO","msg":"created new stream","id":"mle57dgf"}
+{"time":"2025-03-12T16:29:48.223771689-07:00","level":"INFO","msg":"stream: started","id":"mle57dgf"}
+{"time":"2025-03-12T16:29:48.223806-07:00","level":"INFO","msg":"writer: Do: started","stream_id":"mle57dgf"}
+{"time":"2025-03-12T16:29:48.223816721-07:00","level":"INFO","msg":"handler: started","stream_id":"mle57dgf"}
+{"time":"2025-03-12T16:29:48.223866421-07:00","level":"INFO","msg":"sender: started","stream_id":"mle57dgf"}
+{"time":"2025-03-12T16:29:48.454881508-07:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-12T16:36:34.295730945-07:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"}

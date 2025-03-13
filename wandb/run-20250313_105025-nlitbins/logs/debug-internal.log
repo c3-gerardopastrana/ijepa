@@ -1,0 +1,7 @@
+{"time":"2025-03-13T10:50:25.443813444-07:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/workspace/Lidar/ijepa/wandb/run-20250313_105025-nlitbins/logs/debug-core.log"}
+{"time":"2025-03-13T10:50:25.547640556-07:00","level":"INFO","msg":"created new stream","id":"nlitbins"}
+{"time":"2025-03-13T10:50:25.547697505-07:00","level":"INFO","msg":"stream: started","id":"nlitbins"}
+{"time":"2025-03-13T10:50:25.547739971-07:00","level":"INFO","msg":"writer: Do: started","stream_id":"nlitbins"}
+{"time":"2025-03-13T10:50:25.547757309-07:00","level":"INFO","msg":"handler: started","stream_id":"nlitbins"}
+{"time":"2025-03-13T10:50:25.547841338-07:00","level":"INFO","msg":"sender: started","stream_id":"nlitbins"}
+{"time":"2025-03-13T10:50:25.670534065-07:00","level":"INFO","msg":"Starting system monitor"}

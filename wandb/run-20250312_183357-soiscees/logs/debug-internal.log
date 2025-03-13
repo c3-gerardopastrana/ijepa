@@ -1,0 +1,15 @@
+{"time":"2025-03-12T18:33:57.034911985-07:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/workspace/Lidar/ijepa/wandb/run-20250312_183357-soiscees/logs/debug-core.log"}
+{"time":"2025-03-12T18:33:57.13838084-07:00","level":"INFO","msg":"created new stream","id":"soiscees"}
+{"time":"2025-03-12T18:33:57.13841331-07:00","level":"INFO","msg":"stream: started","id":"soiscees"}
+{"time":"2025-03-12T18:33:57.138447073-07:00","level":"INFO","msg":"writer: Do: started","stream_id":"soiscees"}
+{"time":"2025-03-12T18:33:57.138479444-07:00","level":"INFO","msg":"sender: started","stream_id":"soiscees"}
+{"time":"2025-03-12T18:33:57.138503114-07:00","level":"INFO","msg":"handler: started","stream_id":"soiscees"}
+{"time":"2025-03-12T18:33:57.331955937-07:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-12T19:10:25.192728531-07:00","level":"INFO","msg":"stream: closing","id":"soiscees"}
+{"time":"2025-03-12T19:10:25.192763433-07:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-03-12T19:10:25.194171811-07:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-03-12T19:10:25.428708762-07:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-12T19:10:25.563819193-07:00","level":"INFO","msg":"handler: closed","stream_id":"soiscees"}
+{"time":"2025-03-12T19:10:25.56384389-07:00","level":"INFO","msg":"writer: Close: closed","stream_id":"soiscees"}
+{"time":"2025-03-12T19:10:25.563878092-07:00","level":"INFO","msg":"sender: closed","stream_id":"soiscees"}
+{"time":"2025-03-12T19:10:25.56390817-07:00","level":"INFO","msg":"stream: closed","id":"soiscees"}

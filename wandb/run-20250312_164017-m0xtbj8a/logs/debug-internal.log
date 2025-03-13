@@ -1,0 +1,16 @@
+{"time":"2025-03-12T16:40:17.8945425-07:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/workspace/Lidar/ijepa/wandb/run-20250312_164017-m0xtbj8a/logs/debug-core.log"}
+{"time":"2025-03-12T16:40:17.998082391-07:00","level":"INFO","msg":"created new stream","id":"m0xtbj8a"}
+{"time":"2025-03-12T16:40:17.998122509-07:00","level":"INFO","msg":"stream: started","id":"m0xtbj8a"}
+{"time":"2025-03-12T16:40:17.998159983-07:00","level":"INFO","msg":"writer: Do: started","stream_id":"m0xtbj8a"}
+{"time":"2025-03-12T16:40:17.998194529-07:00","level":"INFO","msg":"handler: started","stream_id":"m0xtbj8a"}
+{"time":"2025-03-12T16:40:17.998258327-07:00","level":"INFO","msg":"sender: started","stream_id":"m0xtbj8a"}
+{"time":"2025-03-12T16:40:18.128670155-07:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-12T17:14:48.369734952-07:00","level":"INFO","msg":"api: retrying HTTP error","status":502,"url":"https://api.wandb.ai/files/gerardo-pastrana-c3-ai/SSL/m0xtbj8a/file_stream","body":"\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>502 Server Error</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Server Error</h1>\n<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>\n<h2></h2>\n</body></html>\n"}
+{"time":"2025-03-12T17:16:40.825499313-07:00","level":"INFO","msg":"stream: closing","id":"m0xtbj8a"}
+{"time":"2025-03-12T17:16:40.825541793-07:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-03-12T17:16:40.826239845-07:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-03-12T17:16:41.103687561-07:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-12T17:16:41.21302126-07:00","level":"INFO","msg":"handler: closed","stream_id":"m0xtbj8a"}
+{"time":"2025-03-12T17:16:41.21305133-07:00","level":"INFO","msg":"writer: Close: closed","stream_id":"m0xtbj8a"}
+{"time":"2025-03-12T17:16:41.213096273-07:00","level":"INFO","msg":"sender: closed","stream_id":"m0xtbj8a"}
+{"time":"2025-03-12T17:16:41.213111145-07:00","level":"INFO","msg":"stream: closed","id":"m0xtbj8a"}
