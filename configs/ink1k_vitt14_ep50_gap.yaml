@@ -1,5 +1,5 @@
 data:
-  batch_size: 100
+  batch_size: 256
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
@@ -13,7 +13,7 @@ data:
   use_gaussian_blur: false
   use_horizontal_flip: false
 logging:
-  folder: experiments/vittiny-ep.50_sina/
+  folder: experiments/vitt14_ep50_gap/
   write_tag: jepa
 mask:
   allow_overlap: false
@@ -50,6 +50,6 @@ optimization:
   start_lr: 0.00002
   warmup: 3
   weight_decay: 0.0004
-  loss: "sina"
+  loss: "gap"
   grad_clip_value: 1.0
   use_lars: false

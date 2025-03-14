@@ -74,9 +74,56 @@ class LossFunctions:
         frobenius_norm = torch.sqrt(frobenius_norm.abs())
         trace = torch.trace(sigma_w_inv_b)
         loss = torch.log(frobenius_norm / trace)
-        loss = AllReduce.apply(loss)
         
-        return loss
+        return AllReduce.apply(loss)
+
+    
+    def gap_loss(self, z, h):
+        """
+        Computes the loss given by (lamnda_max-lambda_min)/trace
+        """
+        z = z.mean(dim=1)  # (batch_size, embedding)
+        z = F.normalize(z, p=2, dim=1)
+        z = z.reshape(self.num_samples, self.num_context, -1)
+        sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context, self.del_sigma_augs)
+    
+        # Cast to float 32 and make symmetric
+        sigma_w = sigma_w.to(torch.float64)
+        sigma_b = sigma_b.to(torch.float64)
+        sigma_w = (sigma_w + sigma_w.T) / 2
+        sigma_b = (sigma_b + sigma_b.T) / 2
+    
+
+        # Compute eigenvalues of B and W
+        sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b) 
+        eigvals = torch.linalg.eigvalsh(sigma_w_inv_b)
+        lambda_max = torch.max(eigvals)
+        lambda_min = torch.min(eigvals)
+        epsilon = torch.tensor(1e-6, dtype=sigma_b.dtype, device=sigma_b.device)
+        #lambda_min = torch.max(lambda_min, epsilon)
+
+        epsilon=1e-3
+        threshold = lambda_min + epsilon
+
+        # Mask for valid eigenvalues
+        mask = eigvals < threshold  # Shape: (d,), True where valid
+    
+        # Select valid eigenvalues
+        valid_eigvals = eigvals[mask]
+    
+        # Compute the average (avoid division by zero)
+        if valid_eigvals.numel() > 0:
+            loss = -valid_eigvals.mean()
+        else:
+            loss = torch.tensor(0.0, dtype=eigvals.dtype, device=eigvals.device)
+    
+        
+        # gap = (lambda_max - lambda_min)
+        
+        # trace = torch.trace(sigma_w_inv_b)
+        # #loss = gap / trace
+        # loss = torch.log(gap / trace)
+        return AllReduce.apply(loss)
     
     def get_loss_function(self, loss_name):
         loss_map = {
@@ -84,6 +131,7 @@ class LossFunctions:
             "lidar_student": self.lidar_student,
             "lidar_teacher": self.lidar_teacher,
             "sina": self.sina,
+            "gap": self.gap_loss
         }
         if loss_name not in loss_map:
             raise ValueError(f"Invalid loss function '{loss_name}'. Available options: {list(loss_map.keys())}")
@@ -106,8 +154,8 @@ class LossFunctions:
         sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context, self.del_sigma_augs)
     
         # Cast to float 32 and make symmetric
-        sigma_w = sigma_w.to(torch.float32)
-        sigma_b = sigma_b.to(torch.float32)
+        sigma_w = sigma_w.to(torch.float64)
+        sigma_b = sigma_b.to(torch.float64)
         sigma_w = (sigma_w + sigma_w.T) / 2
         sigma_b = (sigma_b + sigma_b.T) / 2
     
@@ -132,6 +180,10 @@ class LossFunctions:
         eps = 1e-10  # Small constant to avoid log(0)
         max_eigval_norm = eigvals_norm.max()
         min_eigval_norm = eigvals_norm.min()
+        quantile_25 = torch.quantile(eigvals_norm, 0.25)
+        quantile_50 = torch.quantile(eigvals_norm, 0.5)
+        quantile_75 = torch.quantile(eigvals_norm, 0.75)
+
         eigvals_norm = torch.clamp(eigvals_norm, min=eps)
         entropy = -(eigvals_norm * eigvals_norm.log()).sum().item()
         off_diag = sigma_w_inv_b - torch.diag(torch.diagonal(sigma_w_inv_b))
@@ -154,7 +206,10 @@ class LossFunctions:
             "frobenius norm": frobenius_norm,
 
             "max normalized eigenvalue": max_eigval_norm,
-            "min normalized eigenvalue": min_eigval_norm
-            
+            "min normalized eigenvalue": min_eigval_norm,
+
+            "quantile_25": quantile_25,
+            "quantile_50": quantile_50,
+            "quantile_75": quantile_75,
         }
 
