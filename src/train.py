@@ -22,6 +22,7 @@ import logging
 import sys
 import yaml
 import wandb
+import itertools
 
 import numpy as np
 
@@ -33,6 +34,7 @@ import torch.distributed as dist
 
 from src.masks.multiblock import MaskCollator as MBMaskCollator
 from src.masks.utils import apply_masks
+from src.utils.functional import all_gather
 from src.utils.distributed import (
     init_distributed,
     AllReduce,
@@ -70,13 +72,27 @@ logger = logging.getLogger()
 
 def init_wandb(args):
     wandb.init(
-        project="SSL_GAPS",
+        project="SSL_GAPL",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss"
     )
 
-
+# First, define these RPC functions at the module level in your train.py file
+import torch.distributed.rpc as rpc
+#print(f"RPC Initialized: {rpc._is_current_rpc_agent_set()}")
+# Dictionary to store current outputs from each worker
+worker_outputs = {}
+def get_worker_output(worker_rank):
+    """Retrieve the current output tensor from a worker."""
+    print(f"Worker {rank} received RPC call")
+    return worker_outputs.get(worker_rank, None)
+            
+           
+def store_worker_output(worker_rank, output):
+    """Store output tensor on worker for later retrieval."""
+    worker_outputs[worker_rank] = output
+    return True
 def main(args, resume_preempt=False):
 
     # ----------------------------------------------------------------------- #
@@ -253,7 +269,7 @@ def main(args, resume_preempt=False):
                           for i in range(int(ipe*num_epochs*ipe_scale)+1))
 
     start_epoch = 0
-    loss_class = LossFunctions(batch_size*(world_size-1),  num_pred_masks, num_enc_masks)
+    loss_class = LossFunctions(batch_size*world_size,  num_pred_masks, num_enc_masks)
     # -- load training checkpoint
     if load_model:
         encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
@@ -289,7 +305,7 @@ def main(args, resume_preempt=False):
                 torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
     # -- TRAINING LOOP
-    torch.autograd.set_detect_anomaly(True)
+   
     for epoch in range(start_epoch, num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
 
@@ -313,110 +329,56 @@ def main(args, resume_preempt=False):
             maskA_meter.update(len(masks_enc[0][0]))
             maskB_meter.update(len(masks_pred[0][0]))
 
+            
+            
+            
+            
+            # Then modify your train_step function:
             def train_step():
-                _new_lr = scheduler.step()
-                _new_wd = wd_scheduler.step()
+                new_lr = scheduler.step()
+                new_wd = wd_scheduler.step()
                 # --
-
-                def forward_target():
-                    with torch.no_grad():
-                        h = target_encoder(imgs)
-                        h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim
-                        B = len(h)
-                        # -- create targets (masked regions of h)
-                        h = apply_masks(h, masks_pred)
-                        h = repeat_interleave_batch(h, B, repeat=len(masks_enc))
-                        return h
-
                 def forward_context():
                     z = encoder(imgs, masks_enc)
                     z = predictor(z, masks_enc, masks_pred)
                     return z
                 
-                loss_fn = loss_class.get_loss_function(loss_type)
-
-                # Step 1. Forward
+                def loss_fn(gathered_z, gathered_h):
+                    loss = loss_class.get_loss_function(loss_type)(gathered_z, gathered_h)
+                    loss /= world_size
+                    return loss
                 
+                # Step 1. Forward
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
-                    print('rank', rank)
-                    print('world_size', world_size)
-                    
-                    if rank != world_size - 1:
-                        # Forward pass on the first n-1 nodes
-                        z, h = forward_context(), forward_target()
-                    else:
-                        # For the last rank, create dummy tensors with exactly the same shape as what other ranks produce
-                        # We'll use the batch_size variable that should be in scope
-                        # The dummy tensors will be discarded later anyway
-                        
-                        # If we can access the tensor shapes from the model definition:
-                        patches = 42
-                        embedding_size = 192
-                        z_shape = (batch_size, patches, embedding_size)
-                        h_shape = z_shape  # Assuming h has the same shape as z
-                        
-                        z = torch.zeros(z_shape, device='cuda')
-                        h = torch.zeros(h_shape, device='cuda')
-                    
-                    # Ensure all processes reach this point before gathering
+                    z = forward_context()
                     dist.barrier()
-                    
-                    # Gather embeddings from all nodes
-                    gathered_z = AllGather.apply(z)
-                    gathered_h = AllGather.apply(h)
-                    
-                    # Add another barrier to ensure gathering is complete
-                    dist.barrier()
-                    
-                    # Only the last rank computes the loss
-                    if rank == world_size - 1:
-                        # Remove the dummy tensors from the last rank
-                        print('aa',gathered_z.size())
-                        valid_gathered_z = gathered_z[:(world_size - 1) * batch_size * patches]
-                        valid_gathered_h = gathered_h[:(world_size - 1) * batch_size * patches]
-                        
-                        # Compute loss
-                        loss_fn = loss_class.get_loss_function(loss_type)
-                        loss = loss_fn(valid_gathered_z, valid_gathered_h)
-                        print(valid_gathered_z.size())
-
-
-                # On all ranks first
-                    dist.barrier()  # Ensure all processes are synchronized
-                    
-                    if rank == world_size - 1:
-                        #  Step 2. Backward & step (only on last rank)
-                        if use_bfloat16:
-                            scaler.scale(loss).backward()
-                            scaler.unscale_(optimizer)  # Unscale gradients before clipping
-                            torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
-                            torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
-                            scaler.step(optimizer)
-                            scaler.update()
-                        else:
-                            loss.backward()
-                            torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
-                            torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
-                            optimizer.step()
-                        grad_stats = grad_logger(encoder.named_parameters())
-                        optimizer.zero_grad()
-                    
-                    # Add a barrier to ensure backward pass is complete before momentum update
-                    dist.barrier()
-                    
-                    # Step 3. momentum update of target encoder - should be done on ALL ranks
-                    with torch.no_grad():
-                        m = next(momentum_scheduler)
-                        for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
-                            param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
-                    
-                    # Fix the syntax in the return statement
-                    if rank == world_size - 1:
-                        return (float(loss), new_lr, new_wd, grad_stats, gathered_z, False)
-                    else:
-                        # For ranks that didn't compute loss
-                        return (0.0, new_lr, new_wd, None, gathered_z, True)
-            (loss, _new_lr, _new_wd, grad_stats, z, log_data), etime = gpu_timer(train_step)
+                    gathered_z = all_gather(z)
+                    gathered_z = torch.cat(gathered_z, dim=0)
+                    dist.barrier()  # Ensure all ranks complete gathering
+                    gathered_h = torch.zeros_like(gathered_z)
+                    loss = loss_fn(gathered_z, gathered_h)
+                
+                # Step 2. Backward & step
+                if use_bfloat16:
+                    scaler.scale(loss).backward()
+                    torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
+                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
+                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
+                    optimizer.step()
+                
+                grad_stats = grad_logger(encoder.named_parameters())
+                optimizer.zero_grad()
+                dist.barrier()
+                
+                
+                return (float(loss), new_lr, new_wd, grad_stats, gathered_z)
+            
+            (loss, _new_lr, _new_wd, grad_stats, z), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
 
@@ -438,26 +400,23 @@ def main(args, resume_preempt=False):
                                    _new_lr,
                                    torch.cuda.max_memory_allocated() / 1024.**2,
                                    time_meter.avg))
-                    
-                    # Lidar metrics
-                    metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
 
                     # Log to wandb
-                    if log_data:
-                        wandb.log({
-                            'epoch': epoch + 1,
-                            'iteration': itr,
-                            'loss': loss,
-                            'weight decay': _new_wd,
-                            'learning rate': _new_lr,
-                            "grad_norm_avg": grad_stats.avg,
-                            "grad_norm_max": grad_stats.max,
-                            "grad_norm_min": grad_stats.min,
-                            "grad_norm_first_layer": grad_stats.first_layer,
-                            "grad_norm_last_layer": grad_stats.last_layer
-    
-                        })
-                        wandb.log(metrics_dictionary)
+                    metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+                    wandb.log({
+                        'epoch': epoch + 1,
+                        'iteration': itr,
+                        'loss': loss,
+                        'weight decay': _new_wd,
+                        'learning rate': _new_lr,
+                        "grad_norm_avg": grad_stats.avg,
+                        "grad_norm_max": grad_stats.max,
+                        "grad_norm_min": grad_stats.min,
+                        "grad_norm_first_layer": grad_stats.first_layer,
+                        "grad_norm_last_layer": grad_stats.last_layer
+
+                    })
+                    wandb.log(metrics_dictionary)
 
                     if grad_stats is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
@@ -488,4 +447,5 @@ def main(args, resume_preempt=False):
 
 
 if __name__ == "__main__":
+    
     main()

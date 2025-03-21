@@ -1,5 +1,5 @@
 data:
-  batch_size: 256
+  batch_size: 320
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
@@ -13,7 +13,7 @@ data:
   use_gaussian_blur: false
   use_horizontal_flip: false
 logging:
-  folder: experiments/vitt14_ep50_gap/
+  folder: experiments/vittiny-ep.50_gap/
   write_tag: jepa
 mask:
   allow_overlap: false
@@ -24,7 +24,7 @@ mask:
   - 0.85
   - 1.0
   min_keep: 10
-  num_enc_masks: 5
+  num_enc_masks: 10
   num_pred_masks: 1
   patch_size: 14
   pred_mask_scale:
