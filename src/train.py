@@ -72,7 +72,7 @@ logger = logging.getLogger()
 
 def init_wandb(args):
     wandb.init(
-        project="SSL_GAPL",
+        project="SSL_SINA",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss"
@@ -322,6 +322,7 @@ def main(args, resume_preempt=False):
             def load_imgs():
                 # -- unsupervised imgs
                 imgs = udata[0].to(device, non_blocking=True)
+                imgs.requires_grad_(True)
                 masks_1 = [u.to(device, non_blocking=True) for u in masks_enc]
                 masks_2 = [u.to(device, non_blocking=True) for u in masks_pred]
                 return (imgs, masks_1, masks_2)
@@ -371,14 +372,15 @@ def main(args, resume_preempt=False):
                     torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     optimizer.step()
                 
-                grad_stats = grad_logger(encoder.named_parameters())
+                grad_stats_encoder = grad_logger(encoder.named_parameters())
+                grad_stats_predictor = grad_logger(predictor.named_parameters())
                 optimizer.zero_grad()
                 dist.barrier()
                 
                 
-                return (float(loss), new_lr, new_wd, grad_stats, gathered_z)
+                return (float(loss), new_lr, new_wd, grad_stats_encoder, grad_stats_predictor, gathered_z)
             
-            (loss, _new_lr, _new_wd, grad_stats, z), etime = gpu_timer(train_step)
+            (loss, _new_lr, _new_wd, grad_stats_encoder, grad_stats_predictor, z), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
 
@@ -403,28 +405,39 @@ def main(args, resume_preempt=False):
 
                     # Log to wandb
                     metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+                    
                     wandb.log({
                         'epoch': epoch + 1,
                         'iteration': itr,
                         'loss': loss,
                         'weight decay': _new_wd,
                         'learning rate': _new_lr,
-                        "grad_norm_avg": grad_stats.avg,
-                        "grad_norm_max": grad_stats.max,
-                        "grad_norm_min": grad_stats.min,
-                        "grad_norm_first_layer": grad_stats.first_layer,
-                        "grad_norm_last_layer": grad_stats.last_layer
+                        "grad_norm_avg_encoder": grad_stats_encoder.avg,
+                        "grad_norm_max_encoder": grad_stats_encoder.max,
+                        "grad_norm_min_encoder": grad_stats_encoder.min,
+                        "grad_norm_first_layer_encoder": grad_stats_encoder.first_layer,
+                        "grad_norm_last_layer_encoder": grad_stats_encoder.last_layer,
+                        "grad_norm_embed_encoder": grad_stats_encoder.embed,
+                        
+                        "grad_norm_avg_predictor": grad_stats_predictor.avg,
+                        "grad_norm_max_predictor": grad_stats_predictor.max,
+                        "grad_norm_min_predictor": grad_stats_predictor.min,
+                        "grad_norm_first_layer_predictor": grad_stats_predictor.first_layer,
+                        "grad_norm_last_layer_predictor": grad_stats_predictor.last_layer,
+                        "grad_norm_embed_predictor": grad_stats_predictor.embed,
+                        "grad_norm_input": float(torch.norm(imgs.grad.data)),
 
                     })
                     wandb.log(metrics_dictionary)
 
-                    if grad_stats is not None:
+
+                    if grad_stats_encoder is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
                                     % (epoch + 1, itr,
-                                       grad_stats.first_layer,
-                                       grad_stats.last_layer,
-                                       grad_stats.min,
-                                       grad_stats.max))
+                                       grad_stats_encoder.first_layer,
+                                       grad_stats_encoder.last_layer,
+                                       grad_stats_encoder.min,
+                                       grad_stats_encoder.max))
                     
                    
                         

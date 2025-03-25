@@ -79,6 +79,7 @@ def grad_logger(named_params):
     stats = AverageMeter()
     stats.first_layer = None
     stats.last_layer = None
+    stats.embed = None
     for n, p in named_params:
         if (p.grad is not None) and not (n.endswith('.bias') or len(p.shape) == 1):
             grad_norm = float(torch.norm(p.grad.data))
@@ -87,6 +88,10 @@ def grad_logger(named_params):
                 stats.last_layer = grad_norm
                 if stats.first_layer is None:
                     stats.first_layer = grad_norm
+            if 'predictor_proj' in n:
+                stats.embed = grad_norm
     if stats.first_layer is None or stats.last_layer is None:
         stats.first_layer = stats.last_layer = 0.
+    if stats.embed is None:
+        stats.embed = 0.
     return stats

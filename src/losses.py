@@ -48,6 +48,7 @@ class LossFunctions:
         
         return sigma_b, sigma_w
 
+            
     def sina(self, z, h):
         """
         This function calculates the Frobenius norm of the lidar matrix divided by the trace.
