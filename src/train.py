@@ -362,14 +362,15 @@ def main(args, resume_preempt=False):
                 # Step 2. Backward & step
                 if use_bfloat16:
                     scaler.scale(loss).backward()
-                    torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
-                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
+                    scaler.unscale_(optimizer)
+                    total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
+                    total_grad_norm_predictor = torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
-                    torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
+                    total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
+                    total_grad_norm_predictor = torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     optimizer.step()
                 
                 grad_stats_encoder = grad_logger(encoder.named_parameters())
@@ -378,9 +379,9 @@ def main(args, resume_preempt=False):
                 dist.barrier()
                 
                 
-                return (float(loss), new_lr, new_wd, grad_stats_encoder, grad_stats_predictor, gathered_z)
+                return (float(loss), new_lr, new_wd, grad_stats_encoder, grad_stats_predictor, gathered_z, total_grad_norm_encoder, total_grad_norm_predictor)
             
-            (loss, _new_lr, _new_wd, grad_stats_encoder, grad_stats_predictor, z), etime = gpu_timer(train_step)
+            (loss, _new_lr, _new_wd, grad_stats_encoder, grad_stats_predictor, z, total_grad_norm_encoder, total_grad_norm_predictor), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
 
@@ -426,6 +427,9 @@ def main(args, resume_preempt=False):
                         "grad_norm_last_layer_predictor": grad_stats_predictor.last_layer,
                         "grad_norm_embed_predictor": grad_stats_predictor.embed,
                         "grad_norm_input": float(torch.norm(imgs.grad.data)),
+
+                        "total_grad_norm_encoder":total_grad_norm_encoder.item(),
+                        "total_grad_norm_predictor":total_grad_norm_predictor.item(),
 
                     })
                     wandb.log(metrics_dictionary)
