@@ -8,13 +8,17 @@ from src.utils.distributed import AllReduce
 from reptrix import lidar
 
 class LossFunctions:
-    def __init__(self, batch_size=None, num_target=None, num_context=None, del_sigma_augs=1, epsilon=0):
+    def __init__(self, batch_size=None, num_target=None, num_context=None, del_sigma_augs=1, epsilon=0, embed_dim=192):
         self.num_samples = batch_size
         self.num_target = num_target
         self.num_context = num_context
         self.del_sigma_augs = del_sigma_augs
         self.epsilon = epsilon
-    
+        self.diag_matrix_w = torch.diag(torch.rand(embed_dim, device="cuda"))
+        self.diag_matrix_b = torch.diag(torch.rand(embed_dim, device="cuda"))
+        self.sigma_w_inv_b = None
+        
+        
     def jepa(self, z, h):
         loss = F.smooth_l1_loss(z, h)
         return AllReduce.apply(loss)
@@ -25,8 +29,7 @@ class LossFunctions:
     def lidar_teacher(self, z, h):
         return lidar.get_lidar(h, self.num_samples, self.num_target, self.del_sigma_augs)
     
-    @staticmethod
-    def get_lidar_matrices(activations, num_samples, num_augs, del_sigma_augs=1e-6):
+    def get_lidar_matrices(self, activations, num_samples, num_augs, del_sigma_augs=1e-6):
         
         # Compute object activations (mean over augmentations)
         object_activations = activations.mean(dim=1, keepdim=True)  # Mean over augmentations
@@ -44,7 +47,8 @@ class LossFunctions:
         ).mean(dim=0)
 
         # Add small identity matrix to ensure invertibility
-        sigma_w += del_sigma_augs * torch.eye(sigma_w.shape[0], device=sigma_w.device)
+        sigma_w += self.diag_matrix_w
+        sigma_b += self.diag_matrix_b
         
         return sigma_b, sigma_w
 
@@ -57,9 +61,10 @@ class LossFunctions:
         - A is sigma_b (covariance matrix of the signal),
         The trace is equivalent to the trace of B^-1A.
         """
-        z = z.reshape(self.num_samples, self.num_context, -1)
+        z = z.reshape(1, -1)
+        z_reshaped = z.reshape(self.num_samples, self.num_context, -1)
         
-        sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context, self.del_sigma_augs)
+        sigma_b, sigma_w = self.get_lidar_matrices(z_reshaped, self.num_samples, self.num_context, self.del_sigma_augs)
         
         # Cast to float 32 and make symmetric
         sigma_w = sigma_w.to(torch.float32)
@@ -70,12 +75,21 @@ class LossFunctions:
         # loss
         sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b) 
         sigma_w_inv_b = sigma_w_inv_b + self.epsilon  * torch.eye(sigma_w_inv_b.shape[0], device=sigma_w_inv_b.device)
+        
+        # Hook to access gradients later
+        sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad))
+        
         frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
         frobenius_norm = torch.sqrt(frobenius_norm.abs())
         trace = torch.trace(sigma_w_inv_b)
         loss = torch.log(frobenius_norm / trace)
 
         return loss
+
+    
+    def save_matrix_grad(self, grad):
+        """Hook to save gradients for sigma_w_inv_b"""
+        self.sigma_w_inv_b_grad = grad
 
     
     def gap_loss(self, z, h):
@@ -95,7 +109,7 @@ class LossFunctions:
 
         # Compute eigenvalues of B and W
         sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b) 
-        eigvals = torch.linalg.eigvalsh(sigma_w_inv_b)
+        eigvals = torch.linalg.eigvals(sigma_w_inv_b).real
         lambda_max = torch.max(eigvals)
         lambda_min = torch.min(eigvals)
         

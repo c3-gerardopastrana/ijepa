@@ -72,7 +72,7 @@ logger = logging.getLogger()
 
 def init_wandb(args):
     wandb.init(
-        project="SSL_SINA",
+        project="SSL_SINA_random",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss"
@@ -406,7 +406,6 @@ def main(args, resume_preempt=False):
 
                     # Log to wandb
                     metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
-                    
                     wandb.log({
                         'epoch': epoch + 1,
                         'iteration': itr,
@@ -427,6 +426,7 @@ def main(args, resume_preempt=False):
                         "grad_norm_last_layer_predictor": grad_stats_predictor.last_layer,
                         "grad_norm_embed_predictor": grad_stats_predictor.embed,
                         "grad_norm_input": float(torch.norm(imgs.grad.data)),
+                        "grad_norm_lidar": float(torch.norm(loss_class.sigma_w_inv_b_grad.data)),
 
                         "total_grad_norm_encoder":total_grad_norm_encoder.item(),
                         "total_grad_norm_predictor":total_grad_norm_predictor.item(),
