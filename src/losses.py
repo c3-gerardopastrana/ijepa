@@ -8,7 +8,7 @@ from src.utils.distributed import AllReduce
 from reptrix import lidar
 
 class LossFunctions:
-    def __init__(self, batch_size=None, num_target=None, num_context=None, del_sigma_augs=1, epsilon=0, embed_dim=192):
+    def __init__(self, batch_size=None, num_target=None, num_context=None, del_sigma_augs=1, epsilon=0, embed_dim=192, scaler=None):
         self.num_samples = batch_size
         self.num_target = num_target
         self.num_context = num_context
@@ -16,7 +16,8 @@ class LossFunctions:
         self.epsilon = epsilon
         self.diag_matrix_w = torch.diag(torch.rand(embed_dim, device="cuda"))
         self.diag_matrix_b = torch.diag(torch.rand(embed_dim, device="cuda"))
-        self.sigma_w_inv_b = None
+        self.saved_grads = {}
+        self.scaler = scaler
         
         
     def jepa(self, z, h):
@@ -77,8 +78,9 @@ class LossFunctions:
         sigma_w_inv_b = sigma_w_inv_b + self.epsilon  * torch.eye(sigma_w_inv_b.shape[0], device=sigma_w_inv_b.device)
         
         # Hook to access gradients later
-        sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad))
-        
+        sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
+        z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
+                
         frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
         frobenius_norm = torch.sqrt(frobenius_norm.abs())
         trace = torch.trace(sigma_w_inv_b)
@@ -87,11 +89,15 @@ class LossFunctions:
         return loss
 
     
-    def save_matrix_grad(self, grad):
-        """Hook to save gradients for sigma_w_inv_b"""
-        self.sigma_w_inv_b_grad = grad
+    def save_matrix_grad(self, grad, key):
+        """Generic hook to save gradients dynamically in a dictionary"""
+        if self.scaler is not None:
+            scale = self.scaler.get_scale()
+            self.saved_grads[key] = grad / scale
+        else:
+            self.saved_grads[key] = grad
 
-    
+
     def gap_loss(self, z, h):
         """
         Computes the loss given by (lamnda_max-lambda_min)/trace

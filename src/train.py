@@ -72,7 +72,7 @@ logger = logging.getLogger()
 
 def init_wandb(args):
     wandb.init(
-        project="SSL_SINA_random",
+        project="SSL_SINA_random_large_lr",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss"
@@ -240,7 +240,10 @@ def main(args, resume_preempt=False):
             root_path=root_path,
             image_folder=image_folder,
             copy_data=copy_data,
-            drop_last=True)
+            drop_last=True,
+            #subset_file = "src/datasets/imagenet_subset.txt"
+    )
+    
     ipe = len(unsupervised_loader)
 
     # -- init optimizer and scheduler
@@ -269,7 +272,7 @@ def main(args, resume_preempt=False):
                           for i in range(int(ipe*num_epochs*ipe_scale)+1))
 
     start_epoch = 0
-    loss_class = LossFunctions(batch_size*world_size,  num_pred_masks, num_enc_masks)
+    loss_class = LossFunctions(batch_size*world_size,  num_pred_masks, num_enc_masks, scaler=scaler)
     # -- load training checkpoint
     if load_model:
         encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
@@ -341,7 +344,7 @@ def main(args, resume_preempt=False):
                 # --
                 def forward_context():
                     z = encoder(imgs, masks_enc)
-                    z = predictor(z, masks_enc, masks_pred)
+                    #z = predictor(z, masks_enc, masks_pred)
                     return z
                 
                 def loss_fn(gathered_z, gathered_h):
@@ -426,7 +429,8 @@ def main(args, resume_preempt=False):
                         "grad_norm_last_layer_predictor": grad_stats_predictor.last_layer,
                         "grad_norm_embed_predictor": grad_stats_predictor.embed,
                         "grad_norm_input": float(torch.norm(imgs.grad.data)),
-                        "grad_norm_lidar": float(torch.norm(loss_class.sigma_w_inv_b_grad.data)),
+                        "grad_norm_lidar": float(torch.norm(loss_class.saved_grads["sigma_w_inv_b"].data)),
+                        "grad_norm_z": float(torch.norm(loss_class.saved_grads["z"].data)),
 
                         "total_grad_norm_encoder":total_grad_norm_encoder.item(),
                         "total_grad_norm_predictor":total_grad_norm_predictor.item(),
