@@ -55,6 +55,7 @@ from src.helper import (
     init_opt)
 from src.transforms import make_transforms
 from src.losses import LossFunctions
+from src.eval import Evaluation
 
 # --
 log_timings = True
@@ -72,7 +73,7 @@ logger = logging.getLogger()
 
 def init_wandb(args):
     wandb.init(
-        project="SSL_SINA_random_large_lr",
+        project="SSL_gap_random_regularized_dynamic",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss"
@@ -246,6 +247,21 @@ def main(args, resume_preempt=False):
     
     ipe = len(unsupervised_loader)
 
+     # -- init evaluation
+    evaluator = Evaluation(
+        transform=transform,
+        mask_collator=mask_collator,
+        pin_mem=pin_mem,
+        num_workers=num_workers,
+        world_size=world_size,
+        rank=rank,
+        root_path=root_path,
+        image_folder=image_folder,
+        batch_size=batch_size,
+        seed=42
+    )
+
+    
     # -- init optimizer and scheduler
     optimizer, scaler, scheduler, wd_scheduler = init_opt(
         encoder=encoder,
@@ -323,7 +339,7 @@ def main(args, resume_preempt=False):
         for itr, (udata, masks_enc, masks_pred) in enumerate(unsupervised_loader):
 
             def load_imgs():
-                # -- unsupervised imgs
+                # -- unsupervised imgs                
                 imgs = udata[0].to(device, non_blocking=True)
                 imgs.requires_grad_(True)
                 masks_1 = [u.to(device, non_blocking=True) for u in masks_enc]
@@ -367,24 +383,21 @@ def main(args, resume_preempt=False):
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
                     total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
-                    total_grad_norm_predictor = torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
                     total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
-                    total_grad_norm_predictor = torch.nn.utils.clip_grad_norm_(predictor.parameters(), grad_clip_value)
                     optimizer.step()
                 
                 grad_stats_encoder = grad_logger(encoder.named_parameters())
-                grad_stats_predictor = grad_logger(predictor.named_parameters())
                 optimizer.zero_grad()
                 dist.barrier()
                 
                 
-                return (float(loss), new_lr, new_wd, grad_stats_encoder, grad_stats_predictor, gathered_z, total_grad_norm_encoder, total_grad_norm_predictor)
+                return (float(loss), new_lr, new_wd, grad_stats_encoder, gathered_z, total_grad_norm_encoder)
             
-            (loss, _new_lr, _new_wd, grad_stats_encoder, grad_stats_predictor, z, total_grad_norm_encoder, total_grad_norm_predictor), etime = gpu_timer(train_step)
+            (loss, _new_lr, _new_wd, grad_stats_encoder, z, total_grad_norm_encoder), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
 
@@ -409,6 +422,8 @@ def main(args, resume_preempt=False):
 
                     # Log to wandb
                     metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+                    
+
                     wandb.log({
                         'epoch': epoch + 1,
                         'iteration': itr,
@@ -420,20 +435,13 @@ def main(args, resume_preempt=False):
                         "grad_norm_min_encoder": grad_stats_encoder.min,
                         "grad_norm_first_layer_encoder": grad_stats_encoder.first_layer,
                         "grad_norm_last_layer_encoder": grad_stats_encoder.last_layer,
-                        "grad_norm_embed_encoder": grad_stats_encoder.embed,
                         
-                        "grad_norm_avg_predictor": grad_stats_predictor.avg,
-                        "grad_norm_max_predictor": grad_stats_predictor.max,
-                        "grad_norm_min_predictor": grad_stats_predictor.min,
-                        "grad_norm_first_layer_predictor": grad_stats_predictor.first_layer,
-                        "grad_norm_last_layer_predictor": grad_stats_predictor.last_layer,
-                        "grad_norm_embed_predictor": grad_stats_predictor.embed,
                         "grad_norm_input": float(torch.norm(imgs.grad.data)),
                         "grad_norm_lidar": float(torch.norm(loss_class.saved_grads["sigma_w_inv_b"].data)),
                         "grad_norm_z": float(torch.norm(loss_class.saved_grads["z"].data)),
 
                         "total_grad_norm_encoder":total_grad_norm_encoder.item(),
-                        "total_grad_norm_predictor":total_grad_norm_predictor.item(),
+                        "top-5 accuracy": evaluator.evaluate_top5_performance(encoder, device)
 
                     })
                     wandb.log(metrics_dictionary)
