@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import top_k_accuracy_score
 from sklearn.model_selection import train_test_split
+from sklearn.exceptions import ConvergenceWarning
 import random
 import os
 
@@ -13,6 +14,7 @@ import warnings
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="None of the inputs have requires_grad=True. Gradients will be None", category=UserWarning, module="torch.utils.checkpoint")
 warnings.filterwarnings("ignore", message="'multi_class' was deprecated", category=FutureWarning, module="sklearn.linear_model._logistic")
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 
 class Evaluation:
@@ -43,12 +45,12 @@ class Evaluation:
             pin_mem=pin_mem,
             training=True,
             num_workers=num_workers,
-            world_size=world_size,
-            rank=rank,
+            world_size=1,
+            rank=0,
             root_path=root_path,
             image_folder=image_folder,
             copy_data=True,
-            drop_last=True,
+            drop_last=False,
             subset_file="src/datasets/imagenet_1_percent.txt"
         )
         return unsupervised_loader

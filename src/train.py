@@ -61,6 +61,7 @@ from src.eval import Evaluation
 log_timings = True
 log_freq = 10
 checkpoint_freq = 50
+log_freq_eval = 100
 # --
 
 _GLOBAL_SEED = 0
@@ -78,6 +79,7 @@ def init_wandb(args):
         config=args,
         group="gapLoss"
     )
+step = 1
 
 # First, define these RPC functions at the module level in your train.py file
 import torch.distributed.rpc as rpc
@@ -422,8 +424,8 @@ def main(args, resume_preempt=False):
 
                     # Log to wandb
                     metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+                    global step
                     
-
                     wandb.log({
                         'epoch': epoch + 1,
                         'iteration': itr,
@@ -439,13 +441,13 @@ def main(args, resume_preempt=False):
                         "grad_norm_input": float(torch.norm(imgs.grad.data)),
                         "grad_norm_lidar": float(torch.norm(loss_class.saved_grads["sigma_w_inv_b"].data)),
                         "grad_norm_z": float(torch.norm(loss_class.saved_grads["z"].data)),
-
-                        "total_grad_norm_encoder":total_grad_norm_encoder.item(),
-                        "top-5 accuracy": evaluator.evaluate_top5_performance(encoder, device)
-
-                    })
-                    wandb.log(metrics_dictionary)
-
+                        "total_grad_norm_encoder":total_grad_norm_encoder.item()},
+                        step=step
+                             )
+                    wandb.log(metrics_dictionary, step=step)
+                    if itr % log_freq_eval == 0:
+                         wandb.log({"top-5 accuracy": evaluator.evaluate_top5_performance(encoder, device)}, step=step)
+                    step += 1
 
                     if grad_stats_encoder is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
@@ -454,7 +456,6 @@ def main(args, resume_preempt=False):
                                        grad_stats_encoder.last_layer,
                                        grad_stats_encoder.min,
                                        grad_stats_encoder.max))
-                    
                    
                         
                         

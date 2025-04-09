@@ -176,7 +176,7 @@ class LossFunctions:
             delta = min_frobenius_norm*(self.max_condition - current_condition)/(self.max_condition - 1)
             delta = delta/(self.embed_dim + 1)
             if delta > 0:
-                self.lambda_ = self.lamnda - delta
+                self.lambda_ = self.lambda_ - delta
                 self.current_it = 0
         self.current_it +=1
         
