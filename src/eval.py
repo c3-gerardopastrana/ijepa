@@ -25,7 +25,7 @@ class Evaluation:
             penalty='l2',
             solver='saga',
             multi_class='multinomial',
-            max_iter=10, # It takes around 20 to fully converge, early stopping
+            max_iter=3, # It takes around 20 to fully converge, early stopping
             n_jobs=-1,
             warm_start=True  # Enable warm start for faster re-fitting
         )

@@ -61,7 +61,7 @@ from src.eval import Evaluation
 log_timings = True
 log_freq = 10
 checkpoint_freq = 50
-log_freq_eval = 100
+log_freq_eval = 200
 # --
 
 _GLOBAL_SEED = 0
@@ -72,14 +72,29 @@ torch.backends.cudnn.benchmark = True
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
 
-def init_wandb(args):
+
+
+
+def init_wandb(args, rank):
+    run_ids = {
+        0: "y9fjc5zw",
+        1: "1m11u4o2",
+        2: "cmon09fw",
+        3: "kqcn5xmf",
+    }
+
     wandb.init(
+        id=run_ids.get(rank),
+        resume="allow",
         project="SSL_gap_random_regularized_dynamic",
         entity="gerardo-pastrana-c3-ai",
         config=args,
-        group="gapLoss"
+        group="gapLoss",
+        name=f"cutoffrun_{rank+1}",
     )
-step = 1
+
+
+step = 642
 
 # First, define these RPC functions at the module level in your train.py file
 import torch.distributed.rpc as rpc
@@ -196,7 +211,7 @@ def main(args, resume_preempt=False):
 
 
     # -- Initialize W&B
-    init_wandb(args)
+    init_wandb(args, rank)
 
     
     # -- init model

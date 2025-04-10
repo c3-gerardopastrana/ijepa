@@ -26,10 +26,10 @@ class LossFunctions:
         self.scaler = scaler
         self.embed_dim = embed_dim
         
-        self.lambda_ = 1
+        self.lambda_ = 0.7
         self.current_it = 0
-        self.stabilization_period = 1000
-        self.max_condition = 1e3
+        self.stabilization_period = 50
+        self.max_condition = 1e4
         
     def jepa(self, z, h):
         loss = F.smooth_l1_loss(z, h)
@@ -93,12 +93,24 @@ class LossFunctions:
         sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
         z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
                 
-        frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
-        frobenius_norm = torch.sqrt(frobenius_norm.abs())
+        max_frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
+        max_frobenius_norm = torch.sqrt(max_frobenius_norm.abs())
+ 
         trace = torch.trace(sigma_w_inv_b)
-        loss = torch.log(frobenius_norm / trace)
+        loss = torch.log(max_frobenius_norm / trace)
 
-        return loss
+        if self.current_it > self.stabilization_period:
+            sigma_b_inv_w = torch.linalg.solve(sigma_b, sigma_w ) 
+            min_frobenius_norm = torch.trace(sigma_b_inv_w @ sigma_b_inv_w)
+            min_frobenius_norm = torch.sqrt(min_frobenius_norm.abs())
+            
+            current_condition = max_frobenius_norm * (min_frobenius_norm)
+            delta = min_frobenius_norm*(self.max_condition - current_condition)/(self.max_condition - 1)
+            delta = delta/(self.embed_dim + 1)
+            if delta > 0:
+                self.lambda_ = self.lambda_ - delta
+                self.current_it = -1
+        self.current_it +=1
 
     
     def save_matrix_grad(self, grad, key):
@@ -172,9 +184,10 @@ class LossFunctions:
         loss = torch.log(gap / trace)
 
         if self.current_it > self.stabilization_period:
-            current_condition = max_frobenius_norm * (1 / min_frobenius_norm)
-            delta = min_frobenius_norm*(self.max_condition - current_condition)/(self.max_condition - 1)
-            delta = delta/(self.embed_dim + 1)
+            current_condition = torch.linalg.cond(sigma_b_inv_w) #max_frobenius_norm * (1 / min_frobenius_norm)
+            min_eigenvalue = torch.linalg.eigvals(sigma_b_inv_w).real.min() * 10 #min_frobenius_norm
+            delta = min_eigenvalue * (self.max_condition - current_condition)/(self.max_condition - 1)
+            delta = delta / (self.embed_dim + 1)
             if delta > 0:
                 self.lambda_ = self.lambda_ - delta
                 self.current_it = 0
@@ -269,41 +282,53 @@ class LossFunctions:
         sigma_b = sigma_b.to(torch.float64)
         sigma_w = (sigma_w + sigma_w.T) / 2
         sigma_b = (sigma_b + sigma_b.T) / 2
-        sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b) 
-        trace_original = torch.trace(sigma_w_inv_b)
         
-        condition_sigma_w_inv_b_original = torch.linalg.cond(sigma_w_inv_b).item()
-        eigvals = torch.linalg.eigvals(sigma_w_inv_b)
-        is_real = torch.abs(eigvals.imag) <= 1e-10
-        complex_count_original = torch.sum(~is_real).item()
+        try:
+            sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b)
+            trace_original = torch.trace(sigma_w_inv_b)
+            condition_sigma_w_inv_b_original = torch.linalg.cond(sigma_w_inv_b).item()
+            eigvals = torch.linalg.eigvals(sigma_w_inv_b)
+            is_real = torch.abs(eigvals.imag) <= 1e-10
+            complex_count_original = torch.sum(~is_real).item()
+            real_eigvals = eigvals[is_real].real
         
-        # Filter out complex eigenvalues
-        real_eigvals = eigvals[is_real].real
+            if len(real_eigvals) > 0:
+                eigvals_norm = real_eigvals / real_eigvals.sum()
+                eps = 1e-6
+                eigvals_norm_clamped = torch.clamp(eigvals_norm, min=eps)
+                entropy_original = -(eigvals_norm_clamped * eigvals_norm_clamped.log()).sum().item()
+                max_eigval_norm_original = eigvals_norm.max().item()
+                min_eigval_norm_original = eigvals_norm.min().item()
+                quantile_25_original = torch.quantile(eigvals_norm, 0.25).item()
+                quantile_50_original = torch.quantile(eigvals_norm, 0.5).item()
+                quantile_75_original = torch.quantile(eigvals_norm, 0.75).item()
+            else:
+                entropy_original = 0
+                max_eigval_norm_original = 0
+                min_eigval_norm_original = 0
+                quantile_25_original = 0
+                quantile_50_original = 0
+                quantile_75_original = 0
         
-        # If we have any real eigenvalues, compute statistics
-        if len(real_eigvals) > 0:
-            # Normalize real eigenvalues
-            eigvals_norm = real_eigvals / real_eigvals.sum()
-            eps = 1e-10  # Small constant to avoid log(0)
-            max_eigval_norm_original = eigvals_norm.max().item()
-            min_eigval_norm_original = eigvals_norm.min().item()
-            quantile_25_original = torch.quantile(eigvals_norm, 0.25).item()
-            quantile_50_original = torch.quantile(eigvals_norm, 0.5).item()
-            quantile_75_original = torch.quantile(eigvals_norm, 0.75).item()
-            eigvals_norm_original = torch.clamp(eigvals_norm, min=eps)
-            entropy_original = -(eigvals_norm * eigvals_norm.log()).sum().item()
-        else:
-            # No real eigenvalues
+            off_diag_original = sigma_w_inv_b - torch.diag(torch.diagonal(sigma_w_inv_b))
+            sum_squared_off_diag_original = torch.sum(off_diag_original ** 2).item()
+            diag_var_original = torch.var(torch.diagonal(sigma_w_inv_b)).item()
+        
+        except RuntimeError:
+            # torch.linalg.solve failed (e.g. due to singularity)
+            sigma_w_inv_b = torch.zeros_like(sigma_b)
+            trace_original = 0
+            condition_sigma_w_inv_b_original = float("inf")
+            entropy_original = 0
+            sum_squared_off_diag_original = 0
+            diag_var_original = 0
             max_eigval_norm_original = 0
             min_eigval_norm_original = 0
             quantile_25_original = 0
             quantile_50_original = 0
             quantile_75_original = 0
-            entropy_original = 0
-        
-        off_diag_original = sigma_w_inv_b - torch.diag(torch.diagonal(sigma_w_inv_b))
-        sum_squared_off_diag_original = torch.sum(off_diag ** 2).item()
-        diag_var_original = torch.var(torch.diagonal(sigma_w_inv_b)).item()
+            complex_count_original = 0
+
         
         return {
             "rank simga_w": rank_sigma_w,

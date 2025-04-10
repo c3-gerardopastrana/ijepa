@@ -32,7 +32,7 @@ mask:
   - 0.2
 meta:
   copy_data: false
-  load_checkpoint: false
+  load_checkpoint: true
   model_name: vit_tiny
   pred_depth: 12
   pred_emb_dim: 384
@@ -46,8 +46,8 @@ optimization:
   final_lr: 1.0e-06
   final_weight_decay: 0.0004
   ipe_scale: 1.0
-  lr: 0.00007
-  start_lr: 0.00002
+  lr: 0.001
+  start_lr: 0.0002
   warmup: 10
   weight_decay: 0.0004
   loss: "gap"
