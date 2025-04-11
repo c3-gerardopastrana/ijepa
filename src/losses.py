@@ -26,9 +26,9 @@ class LossFunctions:
         self.scaler = scaler
         self.embed_dim = embed_dim
         
-        self.lambda_ = 0.7
+        self.lambda_ = 1.3e-1
         self.current_it = 0
-        self.stabilization_period = 50
+        self.stabilization_period = 10
         self.max_condition = 1e4
         
     def jepa(self, z, h):
@@ -60,8 +60,10 @@ class LossFunctions:
 
         # Add small identity matrix to ensure invertibility
         if add_noise:
-            sigma_w = (torch.eye(self.embed_dim, device="cuda") - self.diag_matrix_w) @ sigma_w + self.diag_matrix_w
-            sigma_b = (torch.eye(self.embed_dim, device="cuda") - self.diag_matrix_b) @ sigma_b + self.diag_matrix_b
+            diag_matrix_w = self.lambda_ * self.diag_matrix_w
+            diag_matrix_b = self.lambda_ * self.diag_matrix_b
+            sigma_w = (torch.eye(self.embed_dim, device="cuda") - diag_matrix_w) @ sigma_w + diag_matrix_w
+            sigma_b = (torch.eye(self.embed_dim, device="cuda") - diag_matrix_b) @ sigma_b + diag_matrix_b
         
         return sigma_b, sigma_w
 
@@ -96,7 +98,7 @@ class LossFunctions:
         max_frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
         max_frobenius_norm = torch.sqrt(max_frobenius_norm.abs())
  
-        trace = torch.trace(sigma_w_inv_b)
+        trace = torch.trace(sigma_w_inv_b).abs()
         loss = torch.log(max_frobenius_norm / trace)
 
         if self.current_it > self.stabilization_period:
@@ -122,13 +124,13 @@ class LossFunctions:
             self.saved_grads[key] = grad
 
 
-    def gap_loss(self, z, h):
+    def gap_loss(self, z, h, add_noise=True, collect_grads=True):
         """
         Computes the loss given by (lamnda_max-lambda_min)/trace
         """
         z = z.reshape(self.num_samples, self.num_context, -1)
         
-        sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context, self.del_sigma_augs)
+        sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context, self.del_sigma_augs, add_noise)
     
         # Cast to float 32 and make symmetric
         sigma_w = sigma_w.to(torch.float64)
@@ -169,8 +171,9 @@ class LossFunctions:
         sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b) 
         
         # Hook to access gradients later
-        sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
-        z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
+        if collect_grads:
+            sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
+            z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
                 
         max_frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
         max_frobenius_norm = torch.sqrt(max_frobenius_norm.abs())
@@ -182,15 +185,34 @@ class LossFunctions:
         trace = torch.trace(sigma_w_inv_b)
         gap = max_frobenius_norm - min_frobenius_norm
         loss = torch.log(gap / trace)
+        if gap / trace < 0:
+            print("gap", gap)
+            print('trace', trace)
+            print(max_frobenius_norm)
+            print(min_frobenius_norm)
+            self.lambda_ -= 1e-5
+            self.current_it = -1
+            loss = torch.tensor(0.0, device=gap.device)
+        
 
         if self.current_it > self.stabilization_period:
-            current_condition = torch.linalg.cond(sigma_b_inv_w) #max_frobenius_norm * (1 / min_frobenius_norm)
-            min_eigenvalue = torch.linalg.eigvals(sigma_b_inv_w).real.min() * 10 #min_frobenius_norm
-            delta = min_eigenvalue * (self.max_condition - current_condition)/(self.max_condition - 1)
-            delta = delta / (self.embed_dim + 1)
-            if delta > 0:
-                self.lambda_ = self.lambda_ - delta
-                self.current_it = 0
+            with torch.no_grad():
+                current_condition_b = torch.linalg.cond(sigma_b) 
+                min_eigenvalue_b = torch.linalg.eigvalsh(sigma_b).min()
+                delta_b = min_eigenvalue_b * (self.max_condition - current_condition_b)/(self.max_condition - 1)
+                delta_b = delta_b / (torch.norm(sigma_b - torch.eye(self.embed_dim, device="cuda"), p='fro') + 1)
+    
+                current_condition_w = torch.linalg.cond(sigma_w) 
+                min_eigenvalue_w = torch.linalg.eigvalsh(sigma_w).min()
+                delta_w = min_eigenvalue_w * (self.max_condition - current_condition_w)/(self.max_condition - 1)
+                delta_w = delta_w / (torch.norm(sigma_w - torch.eye(self.embed_dim, device="cuda"), p='fro') + 1)
+    
+                delta = 100 * torch.min(delta_b, delta_w)
+    
+                if delta > 0 and self.lambda_ - delta > 0:
+                    self.lambda_ = self.lambda_ - delta
+                    self.current_it = -1
+                    
         self.current_it +=1
         
         return loss
@@ -362,5 +384,37 @@ class LossFunctions:
             "quantile_50_original_matrix": quantile_50_original,
             "quantile_75_original_matrix": quantile_75_original,
             "complex_eigenvalue_count_original_matrix": complex_count_original,
-            "lambda": self.lambda_
+            "lambda": self.lambda_,
+            "gradient_alignment": self.check_gradient_alignment(z)
         }
+    
+    @torch.no_grad()
+    def check_gradient_alignment(self, z):
+        grad_perturbed = self.saved_grads.get("z", None)
+        if grad_perturbed is None:
+            print("No saved perturbed gradients found.")
+            return 0
+    
+        # Make a fresh z with gradient tracking
+        z_clean = z.detach().clone().requires_grad_(True)
+    
+        # Temporarily enable grad to compute gradients manually
+        with torch.enable_grad():
+            loss_clean = self.gap_loss(z_clean, None, add_noise=False, collect_grads=False)
+            grad_clean, = torch.autograd.grad(
+                outputs=loss_clean,
+                inputs=z_clean,
+                retain_graph=False,
+                create_graph=False,
+                allow_unused=True
+            )
+    
+        if grad_clean is None:
+            print("Clean z did not influence the loss.")
+            return 0
+    
+        return F.cosine_similarity(
+            grad_clean.view(-1), grad_perturbed.view(-1), dim=0
+        ).item()
+
+
