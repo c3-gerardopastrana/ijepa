@@ -61,7 +61,7 @@ from src.eval import Evaluation
 log_timings = True
 log_freq = 10
 checkpoint_freq = 50
-log_freq_eval = 300
+log_freq_eval = 500
 # --
 
 _GLOBAL_SEED = 0
@@ -77,7 +77,7 @@ logger = logging.getLogger()
 
 def init_wandb(args):
     wandb.init(
-        project="SSL_gap_random_regularized_dynamic_fast",
+        project="SSL_sina_penalty",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss",
