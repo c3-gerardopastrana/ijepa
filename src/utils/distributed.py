@@ -11,7 +11,7 @@ from logging import getLogger
 
 logger = getLogger()
 
-def init_distributed(port=40112, rank_and_world_size=(None, None)):
+def init_distributed(port=40113, rank_and_world_size=(None, None)):
     """Initialize distributed training environment.
     
     Args:

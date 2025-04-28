@@ -31,6 +31,7 @@ class LossFunctions:
         self.stabilization_period = 1
         self.max_condition = 1e4
         
+        
     def jepa(self, z, h):
         loss = F.smooth_l1_loss(z, h)
         return AllReduce.apply(loss)
@@ -98,9 +99,13 @@ class LossFunctions:
         trace = torch.trace(sigma_w_inv_b).abs()
        
         lambda_target = torch.tensor(2**14, dtype=sigma_w_inv_b.dtype, device=sigma_w_inv_b.device)
-    
-        penalty = (trace - lambda_target).pow(2) / lambda_target.pow(2)  # scale-free, minimal tuning
-        loss = torch.log(max_frobenius_norm) -   torch.log(trace) + penalty
+        sigma = torch.sqrt(trace / self.embed_dim)
+        penalty = torch.relu(lambda_target - sigma) #(trace - lambda_target).pow(2) #/ lambda_target  # scale-free, minimal tuning
+        if  self.current_it>1000:
+            loss = torch.log(max_frobenius_norm) -   torch.log(trace) + penalty
+        else:
+            loss = penalty
+
         
         return loss
 

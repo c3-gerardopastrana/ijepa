@@ -1,5 +1,5 @@
 data:
-  batch_size: 250
+  batch_size: 16
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
@@ -24,7 +24,7 @@ mask:
   - 0.85
   - 1.0
   min_keep: 10
-  num_enc_masks: 10
+  num_enc_masks: 100
   num_pred_masks: 1
   patch_size: 14
   pred_mask_scale:

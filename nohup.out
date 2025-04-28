@@ -1,0 +1,51 @@
+Process Process-3:
+Traceback (most recent call last):
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/Lidar/ijepa/main.py", line 44, in process_main
+    with open(fname, 'r') as y_file:
+         ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '...'
+Process Process-5:
+Traceback (most recent call last):
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/Lidar/ijepa/main.py", line 44, in process_main
+    with open(fname, 'r') as y_file:
+         ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '...'
+Process Process-4:
+Traceback (most recent call last):
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/Lidar/ijepa/main.py", line 44, in process_main
+    with open(fname, 'r') as y_file:
+         ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '...'
+INFO:root:called-params ...
+Process Process-1:
+Traceback (most recent call last):
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/Lidar/ijepa/main.py", line 44, in process_main
+    with open(fname, 'r') as y_file:
+         ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '...'
+Process Process-2:
+Traceback (most recent call last):
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/root/miniconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/Lidar/ijepa/main.py", line 44, in process_main
+    with open(fname, 'r') as y_file:
+         ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '...'
