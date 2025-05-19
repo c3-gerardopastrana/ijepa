@@ -453,7 +453,7 @@ def main(args, resume_preempt=False):
                                  )
                         wandb.log(metrics_dictionary, step=step)
                         if itr % log_freq_eval == 0:
-                             wandb.log({"top-5 accuracy": evaluator.evaluate_top5_performance(encoder, device)}, step=step)
+                             wandb.log({"top-1 accuracy": evaluator.run_linear_probe(encoder)}, step=step)
                         step += 1
 
                     if grad_stats_encoder is not None:

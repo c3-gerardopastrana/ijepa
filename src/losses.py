@@ -2,35 +2,20 @@ import torch.nn.functional as F
 import torch
 from src.utils.distributed import AllReduce
 
-import torch.nn.functional as F
-import torch
-from src.utils.distributed import AllReduce
-from reptrix import lidar
-import math
 
 class LossFunctions:
-    def __init__(self, batch_size=None, num_target=None, num_context=None, del_sigma_augs=1, epsilon=0, embed_dim=192, scaler=None):
+    def __init__(self, batch_size=None, num_target=None, num_context=None, embed_dim=192, scaler=None, lambda_ = None):
         self.num_samples = batch_size
         self.num_target = num_target
         self.num_context = num_context
-        self.del_sigma_augs = del_sigma_augs
-        self.epsilon = epsilon
 
-        # Norm 1 noise
-        self.diag_values_w = torch.rand(embed_dim, device="cuda")
-        self.diag_values_b = torch.rand(embed_dim, device="cuda")       
-        self.diag_matrix_w = torch.diag(self.diag_values_w / torch.norm(self.diag_values_w))
-        self.diag_matrix_b = torch.diag(self.diag_values_b / torch.norm(self.diag_values_b))
-        
         self.saved_grads = {}
         self.scaler = scaler
         self.embed_dim = embed_dim
         
-        self.lambda_ = 1e-1
-        self.current_it = 0
-        self.stabilization_period = 1
-        self.max_condition = 1e4
-        
+        if self.lambda_ is None:
+            self.lambda_ = 0.1 / embed_dim
+            
         
     def jepa(self, z, h):
         loss = F.smooth_l1_loss(z, h)
@@ -42,9 +27,11 @@ class LossFunctions:
     def lidar_teacher(self, z, h):
         return lidar.get_lidar(h, self.num_samples, self.num_target, self.del_sigma_augs)
     
-    def get_lidar_matrices(self, activations, num_samples, num_augs, lambda_=None):
-        if lambda_ is None:
-            lambda_ = self.lambda_
+    def get_lidar_matrices(self, activations, num_samples, num_augs):
+
+        # Reshape input to match num_samples x num_augs
+        activations = activations.view(replicas, effective_bs, -1).permute(1, 0, 2)
+        
         # Compute object activations (mean over augmentations)
         object_activations = activations.mean(dim=1, keepdim=True)  # Mean over augmentations
         mean_activations = object_activations.mean(dim=0, keepdim=True)  # Mean over samples
@@ -60,19 +47,27 @@ class LossFunctions:
             diff_activations.permute((0, 2, 1)),
             diff_activations,
         ).mean(dim=0)
+
+        # Normalize covariane matrix by n samples
+        sigma_b /= (num_samples - 1)
+        sigma_w /= (num_augs - 1)
     
-        # Add small identity matrix to ensure invertibility
+        # Add small identity matrix to ensure invertibility and symmetrize
         eye = torch.eye(self.embed_dim, device="cuda", dtype=sigma_w.dtype)
-        sigma_w = sigma_w + lambda_ * eye
-        sigma_b = sigma_b + lambda_ * eye
-        sigma_w = sigma_w + sigma_w.T
-        sigma_w = sigma_w.to(torch.float32) / 2
+        sigma_w = sigma_w + self.lambda_ * eye
+        
         sigma_b = sigma_b + sigma_b.T
         sigma_b = sigma_b.to(torch.float32) / 2
+        
+        sigma_w = sigma_w + sigma_w.T
+        sigma_w = sigma_w.to(torch.float32) / 2
+        
+        sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b)
+        sigma_w_inv_b = sigma_w_inv_b + sigma_w_inv_b.T
+        sigma_w_inv_b = sigma_w_inv_b.to(torch.float32) / 2
     
-        return sigma_b, sigma_w
-
-
+        return sigma_b, sigma_w - self.lambda_ * eye, sigma_w_inv_b
+        
             
     def sina(self, z, h):
         """
@@ -82,30 +77,21 @@ class LossFunctions:
         - A is sigma_b (covariance matrix of the signal),
         The trace is equivalent to the trace of B^-1A.
         """
-        z = z.reshape(1, -1)
-        z_reshaped = z.reshape(self.num_samples, self.num_context, -1)
-        
-        sigma_b, sigma_w = self.get_lidar_matrices(z_reshaped, self.num_samples, self.num_context, self.del_sigma_augs)
-
-        # loss
-        sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b) 
+        sigma_b, sigma_w, sigma_w_inv_b = self.get_lidar_matrices(z, self.num_samples, self.num_context)
 
         # Hook to access gradients later
         sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
         z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
-                
+
+        # loss
         max_frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
         max_frobenius_norm = torch.sqrt(max_frobenius_norm.abs())
         trace = torch.trace(sigma_w_inv_b).abs()
-       
-        lambda_target = torch.tensor(2**14, dtype=sigma_w_inv_b.dtype, device=sigma_w_inv_b.device)
-        sigma = torch.sqrt(trace / self.embed_dim)
-        penalty = torch.relu(lambda_target - sigma) #(trace - lambda_target).pow(2) #/ lambda_target  # scale-free, minimal tuning
-        if  self.current_it>1000:
-            loss = torch.log(max_frobenius_norm) -   torch.log(trace) + penalty
-        else:
-            loss = penalty
 
+        lambda_target = torch.tensor(self.embed_dim //2, dtype=sigma_w_inv_b.dtype, device=sigma_w_inv_b.device)
+        penalty = (trace - lambda_target).pow(2) / self.embed_dim
+        
+        loss = torch.log(max_frobenius_norm) -  torch.log(trace) + penalty
         
         return loss
 
@@ -243,140 +229,12 @@ class LossFunctions:
         if loss_name not in loss_map:
             raise ValueError(f"Invalid loss function '{loss_name}'. Available options: {list(loss_map.keys())}")
         return loss_map[loss_name]
-
-
-    def lda_from_matrices_and_accuracy(self, z):
-        """
-        Perform LDA-like projection and compute classification accuracy based on perturbations.
-    
-        Args:
-            z: Tensor of shape (num_samples, num_context, feature_dim) representing perturbed samples.
-    
-        Returns:
-            accuracy: Classification accuracy after projection.
-            projections: Projected features in the LDA space.
-            evals: Eigenvalues from the generalized eigenvalue decomposition.
-            evecs: Eigenvectors from the generalized eigenvalue decomposition.
-        """
-        z = z.reshape(self.num_samples, self.num_context, -1)
-        sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context)
-        sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b)
-    
-        # Eigendecomposition
-        evals_complex, evecs_complex = torch.linalg.eig(sigma_w_inv_b)
-    
-        # Remove complex components (if any)
-        tol = 1e-6
-        is_real = (evals_complex.imag.abs() < tol)
-        evals = evals_complex[is_real].real
-        evecs = evecs_complex[:, is_real].real
-    
-        # # Sort eigenvalues and take top components
-        # sorted_idx = torch.argsort(evals, descending=True)
-        # evals = evals[sorted_idx]
-        # evecs = evecs[:, sorted_idx]
-    
-        # Project to LDA space
-        projections = z.reshape(self.num_samples * self.num_context, -1) @ evecs  
-    
-        # Assign labels: Each set of num_context perturbations belongs to the same class
-        labels = torch.repeat_interleave(torch.arange(self.num_samples), self.num_context).to(z.device)
-    
-        # Compute mean of projected features per class (this is a form of "centroid" classification)
-        unique_labels = torch.unique(labels)
-        centroids = torch.stack([
-            projections[labels == label].mean(0)
-            for label in unique_labels
-        ])
-    
-        # Nearest centroid classification
-        dists = torch.cdist(projections, centroids)
-        preds = dists.argmin(dim=1)
-    
-        # Calculate accuracy
-        accuracy = (preds == labels).float().mean().item()
-    
-        return accuracy, projections, evals, evecs
         
+
     def get_lidar_matrices_properties(self, z): 
-        # try:
-        z = z.reshape(self.num_samples, self.num_context, -1)
-        sigma_b, sigma_w = self.get_lidar_matrices(z, self.num_samples, self.num_context, self.del_sigma_augs)
-        sigma_w_inv_b = torch.linalg.solve(sigma_w, sigma_b)
-        frob_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b).abs().sqrt().item()
-        trace = torch.trace(sigma_w_inv_b).item()
-        rank_w = torch.linalg.matrix_rank(sigma_w).item()
-        rank_b = torch.linalg.matrix_rank(sigma_b).item()
-        rank_inv = torch.linalg.matrix_rank(sigma_w_inv_b).item()
-        cond_w = torch.linalg.cond(sigma_w).item()
-        cond_b = torch.linalg.cond(sigma_b).item()
-        cond_inv = torch.linalg.cond(sigma_w_inv_b).item()
-        
-        eigvals = torch.linalg.eigvals(sigma_w_inv_b)
-        is_real = (eigvals.imag.abs() <= 1e-10)
-        complex_count = (~is_real).sum().item()
-        real_eigs = eigvals[is_real].real
-        
-        if len(real_eigs) > 0:
-            eigs_norm = real_eigs / real_eigs.sum()
-            eps = 1e-10
-            eigs_norm = torch.clamp(eigs_norm, min=eps)
-            entropy = -(eigs_norm * eigs_norm.log()).sum().item()
-            stats = {
-                "entropy": entropy,
-                "max_normalized_eigenvalue": eigs_norm.max().item(),
-                "min_normalized_eigenvalue": eigs_norm.min().item(),
-                "quantile_25": torch.quantile(eigs_norm, 0.25).item(),
-                "quantile_50": torch.quantile(eigs_norm, 0.5).item(),
-                "quantile_75": torch.quantile(eigs_norm, 0.75).item()
-                }
-        else:
-            stats = {key: 0 for key in ["entropy", "max_normalized_eigenvalue", "min_normalized_eigenvalue", "quantile_25", "quantile_50", "quantile_75"]}
-        
-        off_diag = sigma_w_inv_b - torch.diag(torch.diagonal(sigma_w_inv_b))
-        sum_squared_off_diag = (off_diag**2).sum().item()
-        diag_var = torch.var(torch.diagonal(sigma_w_inv_b)).item()
-        accuracy, projections, evals, evecs = self.lda_from_matrices_and_accuracy(z)
+        metrics = get_lidar_properties(z, self.get_lidar_matrices, self.num_samples, self.num_context)
+        return metrics
 
-        return {
-            "trace": trace,
-            "frobenius_norm": frob_norm,
-            "rank_sigma_w": rank_w,
-            "rank_sigma_b": rank_b,
-            "rank_sigma_inv_b": rank_inv,
-            "condition_sigma_w": cond_w,
-            "condition_sigma_b": cond_b,
-            "condition_sigma_inv_b": cond_inv,
-            "complex_eigenvalue_count": complex_count,
-            "sum_squared_off_diag": sum_squared_off_diag,
-            "diag_var": diag_var,
-            "supervised_accuracy": accuracy,
-            **stats
-        }
-        
-        # except RuntimeError as e:
-        #     # Print the error message and error details
-        #     print(f"RuntimeError occurred: {str(e)}")
-        #     print(f"Error Details: {e.__class__} - {e.args}")
-        #     return {
-        #         "trace": 0,
-        #         "frobenius_norm": 0,
-        #         "rank_sigma_w": torch.linalg.matrix_rank(sigma_w).item(),
-        #         "rank_sigma_b": torch.linalg.matrix_rank(sigma_b).item(),
-        #         "rank_sigma_inv_b": 0,
-        #         "condition_sigma_w": torch.linalg.cond(sigma_w).item(),
-        #         "condition_sigma_b": torch.linalg.cond(sigma_b).item(),
-        #         "condition_sigma_inv_b": float("inf"),
-        #         "complex_eigenvalue_count": 0,
-        #         "sum_squared_off_diag": 0,
-        #         "diag_var": 0,
-        #         "entropy": 0,
-        #         "max_normalized_eigenvalue": 0,
-        #         "min_normalized_eigenvalue": 0,
-        #         "quantile_25": 0,
-        #         "quantile_50": 0,
-        #         "quantile_75": 0,
-        #         "supervised_accuracy": 0,
-        #     }
+       
 
 
