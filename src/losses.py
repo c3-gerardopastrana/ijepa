@@ -1,7 +1,7 @@
 import torch.nn.functional as F
 import torch
 from src.utils.distributed import AllReduce
-
+from src.utils_metrics import get_lidar_properties as metrics
 
 class LossFunctions:
     def __init__(self, batch_size=None, num_target=None, num_context=None, embed_dim=192, scaler=None, lambda_ = None):
@@ -232,8 +232,8 @@ class LossFunctions:
         
 
     def get_lidar_matrices_properties(self, z): 
-        metrics = get_lidar_properties(z, self.get_lidar_matrices, self.num_samples, self.num_context)
-        return metrics
+        return metrics(z, self.get_lidar_matrices, self.num_samples, self.num_context)
+
 
        
 
