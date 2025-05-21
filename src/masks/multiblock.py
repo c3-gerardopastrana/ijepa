@@ -132,7 +132,7 @@ class MaskCollator(object):
         e_size = self._sample_block_size(
             generator=g,
             scale=self.enc_mask_scale,
-            aspect_ratio_scale=(1., 1.))
+            aspect_ratio_scale=(0.75, 1.5))
 
         collated_masks_pred, collated_masks_enc = [], []
         min_keep_pred = self.height * self.width

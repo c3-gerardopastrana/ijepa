@@ -23,6 +23,7 @@ import sys
 import yaml
 import wandb
 import itertools
+import time
 
 import numpy as np
 
@@ -452,9 +453,18 @@ def main(args, resume_preempt=False):
                             step=step
                                  )
                         wandb.log(metrics_dictionary, step=step)
-                        if itr % log_freq_eval == 0:
-                             wandb.log({"top-1 accuracy": evaluator.run_linear_probe(encoder)}, step=step)
-                        step += 1
+                    
+                    if itr % log_freq_eval == 0:
+                        
+                        start_time = time.time()
+                        lda_accuracy = evaluator.run_linear_probe(encoder)
+                        
+                        # Only rank 0 gets accuracy; others get None
+                        if rank == 0 and lda_accuracy is not None:
+                            elapsed_time = (time.time() - start_time) / 60
+                            print(f"Total time: {elapsed_time:.2f} minutes")
+                            wandb.log({"top-1 accuracy": lda_accuracy}, step=step)
+                    step += 1
 
                     if grad_stats_encoder is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'

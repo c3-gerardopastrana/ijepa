@@ -79,7 +79,7 @@ class Evaluation:
             for udata, _, _ in dataloader:
                 imgs = udata[0].to(device, non_blocking=True)
                 lbls = udata[1].to(device, non_blocking=True)
-
+                # inherit same fot training TODO
                 with torch.cuda.amp.autocast(enabled=use_amp):
                     emb = encoder(imgs)
 

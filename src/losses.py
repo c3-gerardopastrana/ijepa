@@ -13,7 +13,7 @@ class LossFunctions:
         self.scaler = scaler
         self.embed_dim = embed_dim
         
-        if self.lambda_ is None:
+        if lambda_ is None:
             self.lambda_ = 0.1 / embed_dim
             
         
@@ -30,8 +30,8 @@ class LossFunctions:
     def get_lidar_matrices(self, activations, num_samples, num_augs):
 
         # Reshape input to match num_samples x num_augs
-        activations = activations.view(replicas, effective_bs, -1).permute(1, 0, 2)
-        
+        activations = activations.view(num_augs, num_samples, -1).permute(1, 0, 2)
+
         # Compute object activations (mean over augmentations)
         object_activations = activations.mean(dim=1, keepdim=True)  # Mean over augmentations
         mean_activations = object_activations.mean(dim=0, keepdim=True)  # Mean over samples
