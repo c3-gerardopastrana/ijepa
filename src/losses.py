@@ -27,13 +27,17 @@ class LossFunctions:
     def lidar_teacher(self, z, h):
         return lidar.get_lidar(h, self.num_samples, self.num_target, self.del_sigma_augs)
     
-    def get_lidar_matrices(self, activations, num_samples, num_augs):
+    def get_lidar_matrices(self, activations,xc_mean, num_samples, num_augs):
 
         # Reshape input to match num_samples x num_augs
         activations = activations.view(num_augs, num_samples, -1).permute(1, 0, 2)
+        print(activations.size())
+        print(xc_mean.size())
+        print('do it')
+
 
         # Compute object activations (mean over augmentations)
-        object_activations = activations.mean(dim=1, keepdim=True)  # Mean over augmentations
+        object_activations = xc_mean #activations.mean(dim=1, keepdim=True)  # Mean over augmentations
         mean_activations = object_activations.mean(dim=0, keepdim=True)  # Mean over samples
     
         # Compute inter-object covariance (sigma_obj)
@@ -47,6 +51,7 @@ class LossFunctions:
             diff_activations.permute((0, 2, 1)),
             diff_activations,
         ).mean(dim=0)
+        print(activations.shape)
 
         # Normalize covariane matrix by n samples
         sigma_b /= (num_samples - 1)
@@ -69,31 +74,73 @@ class LossFunctions:
         return sigma_b, sigma_w - self.lambda_ * eye, sigma_w_inv_b
         
             
-    def sina(self, z, h):
-        """
-        This function calculates the Frobenius norm of the lidar matrix divided by the trace.
-        The Frobenius norm is equivalent to calulating the trace of B^-1AB^-1A where:
-        - B is sigma_w (covariance matrix of lidar),
-        - A is sigma_b (covariance matrix of the signal),
-        The trace is equivalent to the trace of B^-1A.
-        """
-        sigma_b, sigma_w, sigma_w_inv_b = self.get_lidar_matrices(z, self.num_samples, self.num_context)
+    # def sina(self, z, h):
+    #     """
+    #     This function calculates the Frobenius norm of the lidar matrix divided by the trace.
+    #     The Frobenius norm is equivalent to calulating the trace of B^-1AB^-1A where:
+    #     - B is sigma_w (covariance matrix of lidar),
+    #     - A is sigma_b (covariance matrix of the signal),
+    #     The trace is equivalent to the trace of B^-1A.
+    #     """
+    #     sigma_b, sigma_w, sigma_w_inv_b = self.get_lidar_matrices(z, self.num_samples, self.num_context)
 
-        # Hook to access gradients later
+    #     # Hook to access gradients later
+    #     sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
+    #     z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
+
+    #     # loss
+    #     max_frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
+    #     max_frobenius_norm = torch.sqrt(max_frobenius_norm.abs())
+    #     trace = torch.trace(sigma_w_inv_b).abs()
+
+    #     lambda_target = torch.tensor(512, dtype=sigma_w_inv_b.dtype, device=sigma_w_inv_b.device)
+    #     penalty = (trace - lambda_target).pow(2) / self.embed_dim
+        
+    #     loss = torch.log(max_frobenius_norm) -  torch.log(trace) + penalty
+        
+    #     return loss
+    
+    def sina(self, z, h, xc_mean):
+        """
+        Computes a combined isotropy loss and mean-norm penalty from the whitened between-class
+        scatter matrix. Does not depend on external isotropy_loss().
+        """
+        # Get matrices
+        sigma_b, sigma_w, sigma_w_inv_b = self.get_lidar_matrices(z, xc_mean, self.num_samples, self.num_context)
+    
+        # Register hooks for debugging
         sigma_w_inv_b.register_hook(lambda grad: self.save_matrix_grad(grad, "sigma_w_inv_b"))
         z.register_hook(lambda grad: self.save_matrix_grad(grad, "z"))
-
-        # loss
-        max_frobenius_norm = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
-        max_frobenius_norm = torch.sqrt(max_frobenius_norm.abs())
-        trace = torch.trace(sigma_w_inv_b).abs()
-
-        lambda_target = torch.tensor(self.embed_dim //2, dtype=sigma_w_inv_b.dtype, device=sigma_w_inv_b.device)
-        penalty = (trace - lambda_target).pow(2) / self.embed_dim
-        
-        loss = torch.log(max_frobenius_norm) -  torch.log(trace) + penalty
-        
+    
+        # --- Isotropy loss ---
+        # Frobenius norm of sigma_w_inv_b
+        frob_sq = torch.trace(sigma_w_inv_b @ sigma_w_inv_b)
+        frob_sq = torch.clamp(frob_sq, min=1e-12)
+        trace = torch.trace(sigma_w_inv_b)
+        trace = torch.clamp(trace, min=1e-6)
+    
+        # Penalty for trace not matching target
+        lambda_target = torch.tensor(128, dtype=sigma_w_inv_b.dtype, device=sigma_w_inv_b.device)
+        penalty = torch.relu(lambda_target - trace) ** 2
+    
+        # Final isotropy component
+        isotropy_loss = frob_sq - (trace ** 2) / self.embed_dim
+        total_isotropy = isotropy_loss  + penalty * 0.05
+    
+        # --- Mean norm penalty ---
+        # Reshape and compute mean per class
+        # z = z.view(self.num_context, self.num_samples, -1).permute(1, 0, 2)  # shape: (num_samples, num_context, D)
+        # xc_mean = z.mean(dim=1)  # shape: (num_samples, D)
+        xc_mean_normed = torch.nn.functional.normalize(xc_mean, dim=1)  # normalize each class mean
+        mu = xc_mean_normed.mean(dim=0)  # average across classes
+        mean_term = torch.sum(mu ** 2)
+    
+        # --- Final loss ---
+        loss =total_isotropy + 96 * mean_term
         return loss
+
+
+        
 
     
     def save_matrix_grad(self, grad, key):
@@ -231,8 +278,8 @@ class LossFunctions:
         return loss_map[loss_name]
         
 
-    def get_lidar_matrices_properties(self, z): 
-        return metrics(z, self.get_lidar_matrices, self.num_samples, self.num_context)
+    def get_lidar_matrices_properties(self, z, xc_mean): 
+        return metrics(z,xc_mean, self.get_lidar_matrices, self.num_samples, self.num_context)
 
 
        

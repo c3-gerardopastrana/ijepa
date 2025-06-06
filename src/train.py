@@ -72,13 +72,13 @@ torch.backends.cudnn.benchmark = True
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
-
+torch.autograd.set_detect_anomaly(True)
 
 
 
 def init_wandb(args):
     wandb.init(
-        project="DELETEME",
+        project="DELETEME3",
         entity="gerardo-pastrana-c3-ai",
         config=args,
         group="gapLoss",
@@ -214,7 +214,7 @@ def main(args, resume_preempt=False):
         pred_depth=pred_depth,
         pred_emb_dim=pred_emb_dim,
         model_name=model_name)
-    target_encoder = copy.deepcopy(encoder)
+    #target_encoder = copy.deepcopy(encoder)
     
 
     # -- make data transforms
@@ -286,18 +286,18 @@ def main(args, resume_preempt=False):
         ipe_scale=ipe_scale,
         use_bfloat16=use_bfloat16,
         use_lars=use_lars)
-    encoder = DistributedDataParallel(encoder, static_graph=True)
-    predictor = DistributedDataParallel(predictor, static_graph=True)
-    target_encoder = DistributedDataParallel(target_encoder)
-    for p in target_encoder.parameters():
-        p.requires_grad = False
+    #encoder = DistributedDataParallel(encoder)#, static_graph=True)
+    #predictor = DistributedDataParallel(predictor, static_graph=True)
+    #target_encoder = DistributedDataParallel(target_encoder)
+    # for p in target_encoder.parameters():
+    #     p.requires_grad = False
 
     # -- momentum schedule
     momentum_scheduler = (ema[0] + i*(ema[1]-ema[0])/(ipe*num_epochs*ipe_scale)
                           for i in range(int(ipe*num_epochs*ipe_scale)+1))
 
     start_epoch = 0
-    loss_class = LossFunctions(batch_size*world_size,  num_pred_masks, num_enc_masks, scaler=scaler)
+    loss_class = LossFunctions(batch_size,  32, 32, scaler=scaler)
     # -- load training checkpoint
     if load_model:
         encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
@@ -318,7 +318,7 @@ def main(args, resume_preempt=False):
         save_dict = {
             'encoder': encoder.state_dict(),
             'predictor': predictor.state_dict(),
-            'target_encoder': target_encoder.state_dict(),
+            #'target_encoder': target_encoder.state_dict(),
             'opt': optimizer.state_dict(),
             'scaler': None if scaler is None else scaler.state_dict(),
             'epoch': epoch,
@@ -333,7 +333,8 @@ def main(args, resume_preempt=False):
                 torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
     # -- TRAINING LOOP
-   
+    del predictor
+    torch.cuda.empty_cache()
     for epoch in range(start_epoch, num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
 
@@ -367,29 +368,52 @@ def main(args, resume_preempt=False):
                 new_lr = scheduler.step()
                 new_wd = wd_scheduler.step()
                 # --
+                def forward_target():
+                    with torch.no_grad():
+                        h = target_encoder(imgs)
+                        h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim
+                        B = len(h)
+                        # -- create targets (masked regions of h)
+                        h = apply_masks(h, masks_pred)
+                        h = repeat_interleave_batch(h, B, repeat=len(masks_enc))
+                        return h
+
                 def forward_context():
                     z = encoder(imgs, masks_enc)
                     #z = predictor(z, masks_enc, masks_pred)
-                    return z
+                    #with torch.no_grad():
+                    xc_means = encoder(imgs)
+                    xc_means = xc_means.unsqueeze(1)
+
+                    
+                    return z, xc_means
                 
-                def loss_fn(gathered_z, gathered_h):
-                    loss = loss_class.get_loss_function(loss_type)(gathered_z, gathered_h)
-                    loss /= world_size
-                    return loss
+                def loss_fn(gathered_z, gathered_h, xc_mean):
+                    loss = loss_class.get_loss_function('sina')(gathered_z, gathered_h, xc_mean)
+                    #loss /= world_size
+                    return AllReduce.apply(loss)
                 
                 # Step 1. Forward
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
-                    z = forward_context()
-                    dist.barrier()
-                    gathered_z = all_gather(z)
-                    gathered_z = torch.cat(gathered_z, dim=0)
-                    dist.barrier()  # Ensure all ranks complete gathering
-                    gathered_h = torch.zeros_like(gathered_z)
-                    loss = loss_fn(gathered_z, gathered_h)
+                    #z = forward_context()
+                    #dist.barrier()
+                    #gathered_z = all_gather(z)
+                    #gathered_z = torch.cat(gathered_z, dim=0)
+                    #dist.barrier()  # Ensure all ranks complete gathering
+                    #gathered_h = torch.zeros_like(gathered_z)
+                    #loss = loss_fn(gathered_z, gathered_h)
+                    
+                    #h = forward_target()
+                    
+                    z, xc_means = forward_context()
+                    h= torch.zeros_like(z)
+                    loss = loss_fn(z, h, xc_means)
+                    print(xc_means.size(), z.size())
+                    #loss = loss_fn(z, torch.zeros_like(z))
                 
                 # Step 2. Backward & step
                 if use_bfloat16:
-                    scaler.scale(loss).backward()
+                    scaler.scale(loss).backward(retain_graph=True)
                     scaler.unscale_(optimizer)
                     total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
                     scaler.step(optimizer)
@@ -401,12 +425,17 @@ def main(args, resume_preempt=False):
                 
                 grad_stats_encoder = grad_logger(encoder.named_parameters())
                 optimizer.zero_grad()
-                dist.barrier()
+                #dist.barrier()
+                 # Step 3. momentum update of target encoder
+                # with torch.no_grad():
+                #     m = next(momentum_scheduler)
+                #     for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
+                #         param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
                 
                 
-                return (float(loss), new_lr, new_wd, grad_stats_encoder, gathered_z, total_grad_norm_encoder)
+                return (float(loss), new_lr, new_wd, grad_stats_encoder, z, xc_means, total_grad_norm_encoder)
             
-            (loss, _new_lr, _new_wd, grad_stats_encoder, z, total_grad_norm_encoder), etime = gpu_timer(train_step)
+            (loss, _new_lr, _new_wd, grad_stats_encoder, z, xc_means, total_grad_norm_encoder), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
 
@@ -431,7 +460,7 @@ def main(args, resume_preempt=False):
 
                     # Log to wandb
                     if rank == 0:
-                        metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+                        metrics_dictionary = loss_class.get_lidar_matrices_properties(z, xc_means)
                         global step
                         
                         wandb.log({
@@ -446,9 +475,9 @@ def main(args, resume_preempt=False):
                             "grad_norm_first_layer_encoder": grad_stats_encoder.first_layer,
                             "grad_norm_last_layer_encoder": grad_stats_encoder.last_layer,
                             
-                            "grad_norm_input": float(torch.norm(imgs.grad.data)),
-                            "grad_norm_lidar": float(torch.norm(loss_class.saved_grads["sigma_w_inv_b"].data)),
-                            "grad_norm_z": float(torch.norm(loss_class.saved_grads["z"].data)),
+                            #"grad_norm_input": float(torch.norm(imgs.grad.data)),
+                            #"grad_norm_lidar": float(torch.norm(loss_class.saved_grads["sigma_w_inv_b"].data)),
+                            #"grad_norm_z": float(torch.norm(loss_class.saved_grads["z"].data)),
                             "total_grad_norm_encoder":total_grad_norm_encoder.item()},
                             step=step
                                  )

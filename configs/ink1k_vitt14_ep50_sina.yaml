@@ -1,12 +1,12 @@
 data:
-  batch_size: 64
+  batch_size: 192
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
   - 1.0
   crop_size: 224
   image_folder: /data/datasets/imagenet_full_size/061417/
-  num_workers: 10
+  num_workers: 1
   pin_mem: true
   root_path: src/datasets
   use_color_distortion: false
@@ -16,15 +16,15 @@ logging:
   folder: experiments/vittiny-ep.50_sina/
   write_tag: jepa
 mask:
-  allow_overlap: true
+  allow_overlap: false
   aspect_ratio:
   - 0.75
   - 1.5
   enc_mask_scale:
-  - 0.65
+  - 0.7
   - 1.0
   min_keep: 10
-  num_enc_masks: 128
+  num_enc_masks: 32
   num_pred_masks: 1
   patch_size: 14
   pred_mask_scale:

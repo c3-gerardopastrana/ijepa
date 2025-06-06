@@ -1,6 +1,6 @@
 import torch
 
-def get_lidar_properties(z, get_lidar_matrices, num_samples, num_context):
+def get_lidar_properties(z, xc_mean,get_lidar_matrices, num_samples, num_context):
     """
     Compute LDA projections and diagnostic statistics from within-class and between-class scatter matrices.
 
@@ -14,7 +14,7 @@ def get_lidar_properties(z, get_lidar_matrices, num_samples, num_context):
     Returns:
         Dictionary of diagnostics and statistics.
     """
-    sigma_b, sigma_w, sigma_w_inv_b = get_lidar_matrices(z, num_samples, num_context)
+    sigma_b, sigma_w, sigma_w_inv_b = get_lidar_matrices(z,xc_mean, num_samples, num_context)
 
     # Eigendecomposition
     evals_complex, evecs_complex = torch.linalg.eig(sigma_w_inv_b)
@@ -28,18 +28,34 @@ def get_lidar_properties(z, get_lidar_matrices, num_samples, num_context):
     evecs = evecs_complex[:, is_real].real
 
     # LDA projection
-    projections = z.reshape(num_samples * num_context, -1) @ evecs
-    labels = torch.repeat_interleave(torch.arange(num_samples), num_context).to(z.device)
+    # projections = z.reshape(num_samples * num_context, -1).to(torch.float32) @ evecs#z.reshape(num_samples * num_context, -1) @ evecs
+    # labels = torch.repeat_interleave(torch.arange(num_samples), num_context).to(z.device)
 
-    # Centroids and classification
-    unique_labels = torch.unique(labels)
-    centroids = torch.stack([
-        projections[labels == label].mean(0)
-        for label in unique_labels
-    ])
-    dists = torch.cdist(projections, centroids)
-    preds = dists.argmin(dim=1)
+    # # Centroids and classification
+    # unique_labels = torch.unique(labels)
+    # centroids = torch.stack([
+    #     projections[labels == label].mean(0)
+    #     for label in unique_labels
+    # ])
+    # dists = torch.cdist(projections, centroids)
+    # preds = dists.argmin(dim=1)
+    # accuracy = (preds == labels).float().mean().item()
+
+    # Reshape z and calculate nearest neighbors
+    z_reshaped = z.reshape(num_samples * num_context, -1).to(torch.float32)
+    
+    # Labels
+    labels = torch.repeat_interleave(torch.arange(num_samples), num_context).to(z.device)
+    
+    # Calculate distances between reshaped z and xc_mean (class means)
+    dists = torch.cdist(z_reshaped, xc_mean)  # Compute distances to class means
+    
+    # Nearest neighbor classification
+    preds = dists.argmin(dim=1)  # Choose class with minimum distance
+    
+    # Calculate accuracy
     accuracy = (preds == labels).float().mean().item()
+
 
     def eigen_stats_from_symmetric_matrix(mat: torch.Tensor, eps: float = 1e-10) -> dict:
         eigs = torch.linalg.eigvalsh(mat)
@@ -67,7 +83,7 @@ def get_lidar_properties(z, get_lidar_matrices, num_samples, num_context):
         return off_diag, sum_squared_off_diag, diag_var
 
     # Norms of class means
-    z_reshaped = z.view(num_samples, num_context, -1).permute(1, 0, 2)
+    z_reshaped = z.view(num_context, num_samples, -1).permute(1, 0, 2)
     object_activations = z_reshaped.mean(dim=1, keepdim=True)
     mean_activations = object_activations.mean(dim=0, keepdim=True)
     norms = torch.norm(mean_activations, dim=1)

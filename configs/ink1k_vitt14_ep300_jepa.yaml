@@ -5,7 +5,7 @@ data:
   - 0.3
   - 1.0
   crop_size: 224
-  image_folder: imagenet_full_size/061417/
+  image_folder: /data/datasets/imagenet_full_size/061417/
   num_workers: 10
   pin_mem: true
   root_path: src/datasets
@@ -51,3 +51,6 @@ optimization:
   warmup: 40
   weight_decay: 0.04
   loss: "jepa"
+  grad_clip_value: 5.0
+  use_lars: false
+

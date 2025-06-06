@@ -327,6 +327,9 @@ class VisionTransformerPredictor(nn.Module):
         x = x[:, N_ctxt:]
         x = self.predictor_proj(x)
 
+        x = x.mean(dim=1)  # (batch_size, embedding) pooling
+        x = F.normalize(x, p=2, dim=1)
+
         
         return x
 
@@ -425,7 +428,7 @@ class VisionTransformer(nn.Module):
         # -- fwd prop
         for i, blk in enumerate(self.blocks):
             if self.use_checkpoint:  # <-- Apply checkpointing if enabled
-                x = checkpoint.checkpoint(blk, x)
+                x = checkpoint.checkpoint(blk, x, use_reentrant=True)
             else:
                 x = blk(x)
 
