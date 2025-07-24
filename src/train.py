@@ -21,6 +21,9 @@ import copy
 import logging
 import sys
 import yaml
+import wandb
+import itertools
+import time
 
 import numpy as np
 
@@ -28,12 +31,16 @@ import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
+import torch.distributed as dist
 
 from src.masks.multiblock import MaskCollator as MBMaskCollator
 from src.masks.utils import apply_masks
+from src.utils.functional import all_gather
 from src.utils.distributed import (
     init_distributed,
-    AllReduce
+    AllReduce,
+    AllGather
+
 )
 from src.utils.logging import (
     CSVLogger,
@@ -48,11 +55,14 @@ from src.helper import (
     init_model,
     init_opt)
 from src.transforms import make_transforms
+from src.losses import LossFunctions
+from src.eval import Evaluation
 
 # --
 log_timings = True
 log_freq = 10
 checkpoint_freq = 50
+log_freq_eval = 500
 # --
 
 _GLOBAL_SEED = 0
@@ -64,6 +74,34 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
 
 
+
+
+def init_wandb(args):
+    wandb.init(
+        project="DELETEME",
+        entity="gerardo-pastrana-c3-ai",
+        config=args,
+        group="gapLoss",
+    )
+
+
+step = 1
+
+# First, define these RPC functions at the module level in your train.py file
+import torch.distributed.rpc as rpc
+#print(f"RPC Initialized: {rpc._is_current_rpc_agent_set()}")
+# Dictionary to store current outputs from each worker
+worker_outputs = {}
+def get_worker_output(worker_rank):
+    """Retrieve the current output tensor from a worker."""
+    print(f"Worker {rank} received RPC call")
+    return worker_outputs.get(worker_rank, None)
+            
+           
+def store_worker_output(worker_rank, output):
+    """Store output tensor on worker for later retrieval."""
+    worker_outputs[worker_rank] = output
+    return True
 def main(args, resume_preempt=False):
 
     # ----------------------------------------------------------------------- #
@@ -120,6 +158,9 @@ def main(args, resume_preempt=False):
     start_lr = args['optimization']['start_lr']
     lr = args['optimization']['lr']
     final_lr = args['optimization']['final_lr']
+    loss_type =  args['optimization']['loss']
+    grad_clip_value = args['optimization']['grad_clip_value']
+    use_lars = args['optimization']['use_lars']
 
     # -- LOGGING
     folder = args['logging']['folder']
@@ -128,6 +169,7 @@ def main(args, resume_preempt=False):
     dump = os.path.join(folder, 'params-ijepa.yaml')
     with open(dump, 'w') as f:
         yaml.dump(args, f)
+
     # ----------------------------------------------------------------------- #
 
     try:
@@ -158,6 +200,12 @@ def main(args, resume_preempt=False):
                            ('%.5f', 'mask-B'),
                            ('%d', 'time (ms)'))
 
+
+    # -- Initialize W&B
+    if rank == 0:
+        init_wandb(args)
+
+    
     # -- init model
     encoder, predictor = init_model(
         device=device,
@@ -167,6 +215,7 @@ def main(args, resume_preempt=False):
         pred_emb_dim=pred_emb_dim,
         model_name=model_name)
     target_encoder = copy.deepcopy(encoder)
+    
 
     # -- make data transforms
     mask_collator = MBMaskCollator(
@@ -201,9 +250,27 @@ def main(args, resume_preempt=False):
             root_path=root_path,
             image_folder=image_folder,
             copy_data=copy_data,
-            drop_last=True)
+            drop_last=True,
+            #subset_file = "src/datasets/imagenet_subset.txt"
+    )
+    
     ipe = len(unsupervised_loader)
 
+     # -- init evaluation
+    evaluator = Evaluation(
+        transform=transform,
+        mask_collator=mask_collator,
+        pin_mem=pin_mem,
+        num_workers=num_workers,
+        world_size=world_size,
+        rank=rank,
+        root_path=root_path,
+        image_folder=image_folder,
+        batch_size=batch_size,
+        seed=42
+    )
+
+    
     # -- init optimizer and scheduler
     optimizer, scaler, scheduler, wd_scheduler = init_opt(
         encoder=encoder,
@@ -217,7 +284,8 @@ def main(args, resume_preempt=False):
         warmup=warmup,
         num_epochs=num_epochs,
         ipe_scale=ipe_scale,
-        use_bfloat16=use_bfloat16)
+        use_bfloat16=use_bfloat16,
+        use_lars=use_lars)
     encoder = DistributedDataParallel(encoder, static_graph=True)
     predictor = DistributedDataParallel(predictor, static_graph=True)
     target_encoder = DistributedDataParallel(target_encoder)
@@ -229,6 +297,7 @@ def main(args, resume_preempt=False):
                           for i in range(int(ipe*num_epochs*ipe_scale)+1))
 
     start_epoch = 0
+    loss_class = LossFunctions(batch_size*world_size,  num_pred_masks, num_enc_masks, scaler=scaler)
     # -- load training checkpoint
     if load_model:
         encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
@@ -264,6 +333,7 @@ def main(args, resume_preempt=False):
                 torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
     # -- TRAINING LOOP
+   
     for epoch in range(start_epoch, num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
 
@@ -278,8 +348,9 @@ def main(args, resume_preempt=False):
         for itr, (udata, masks_enc, masks_pred) in enumerate(unsupervised_loader):
 
             def load_imgs():
-                # -- unsupervised imgs
+                # -- unsupervised imgs                
                 imgs = udata[0].to(device, non_blocking=True)
+                imgs.requires_grad_(True)
                 masks_1 = [u.to(device, non_blocking=True) for u in masks_enc]
                 masks_2 = [u.to(device, non_blocking=True) for u in masks_pred]
                 return (imgs, masks_1, masks_2)
@@ -287,58 +358,58 @@ def main(args, resume_preempt=False):
             maskA_meter.update(len(masks_enc[0][0]))
             maskB_meter.update(len(masks_pred[0][0]))
 
+            
+            
+            
+            
+            # Then modify your train_step function:
             def train_step():
-                _new_lr = scheduler.step()
-                _new_wd = wd_scheduler.step()
+                new_lr = scheduler.step()
+                new_wd = wd_scheduler.step()
                 # --
-
-                def forward_target():
-                    with torch.no_grad():
-                        h = target_encoder(imgs)
-                        h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim
-                        B = len(h)
-                        # -- create targets (masked regions of h)
-                        h = apply_masks(h, masks_pred)
-                        h = repeat_interleave_batch(h, B, repeat=len(masks_enc))
-                        return h
-
                 def forward_context():
                     z = encoder(imgs, masks_enc)
-                    z = predictor(z, masks_enc, masks_pred)
+                    #z = predictor(z, masks_enc, masks_pred)
                     return z
-
-                def loss_fn(z, h):
-                    loss = F.smooth_l1_loss(z, h)
-                    loss = AllReduce.apply(loss)
+                
+                def loss_fn(gathered_z, gathered_h):
+                    loss = loss_class.get_loss_function(loss_type)(gathered_z, gathered_h)
+                    loss /= world_size
                     return loss
-
+                
                 # Step 1. Forward
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_bfloat16):
-                    h = forward_target()
                     z = forward_context()
-                    loss = loss_fn(z, h)
-
-                #  Step 2. Backward & step
+                    dist.barrier()
+                    gathered_z = all_gather(z)
+                    gathered_z = torch.cat(gathered_z, dim=0)
+                    dist.barrier()  # Ensure all ranks complete gathering
+                    gathered_h = torch.zeros_like(gathered_z)
+                    loss = loss_fn(gathered_z, gathered_h)
+                
+                # Step 2. Backward & step
                 if use_bfloat16:
                     scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
+                    total_grad_norm_encoder = torch.nn.utils.clip_grad_norm_(encoder.parameters(), grad_clip_value)
                     optimizer.step()
-                grad_stats = grad_logger(encoder.named_parameters())
+                
+                grad_stats_encoder = grad_logger(encoder.named_parameters())
                 optimizer.zero_grad()
-
-                # Step 3. momentum update of target encoder
-                with torch.no_grad():
-                    m = next(momentum_scheduler)
-                    for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
-                        param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
-
-                return (float(loss), _new_lr, _new_wd, grad_stats)
-            (loss, _new_lr, _new_wd, grad_stats), etime = gpu_timer(train_step)
+                dist.barrier()
+                
+                
+                return (float(loss), new_lr, new_wd, grad_stats_encoder, gathered_z, total_grad_norm_encoder)
+            
+            (loss, _new_lr, _new_wd, grad_stats_encoder, z, total_grad_norm_encoder), etime = gpu_timer(train_step)
             loss_meter.update(loss)
             time_meter.update(etime)
+
 
             # -- Logging
             def log_stats():
@@ -358,22 +429,70 @@ def main(args, resume_preempt=False):
                                    torch.cuda.max_memory_allocated() / 1024.**2,
                                    time_meter.avg))
 
-                    if grad_stats is not None:
+                    # Log to wandb
+                    if rank == 0:
+                        metrics_dictionary = loss_class.get_lidar_matrices_properties(z)
+                        global step
+                        
+                        wandb.log({
+                            'epoch': epoch + 1,
+                            'iteration': itr,
+                            'loss': loss,
+                            'weight decay': _new_wd,
+                            'learning rate': _new_lr,
+                            "grad_norm_avg_encoder": grad_stats_encoder.avg,
+                            "grad_norm_max_encoder": grad_stats_encoder.max,
+                            "grad_norm_min_encoder": grad_stats_encoder.min,
+                            "grad_norm_first_layer_encoder": grad_stats_encoder.first_layer,
+                            "grad_norm_last_layer_encoder": grad_stats_encoder.last_layer,
+                            
+                            "grad_norm_input": float(torch.norm(imgs.grad.data)),
+                            "grad_norm_lidar": float(torch.norm(loss_class.saved_grads["sigma_w_inv_b"].data)),
+                            "grad_norm_z": float(torch.norm(loss_class.saved_grads["z"].data)),
+                            "total_grad_norm_encoder":total_grad_norm_encoder.item()},
+                            step=step
+                                 )
+                        wandb.log(metrics_dictionary, step=step)
+                    
+                    if itr % log_freq_eval == 0:
+                        
+                        start_time = time.time()
+                        lda_accuracy = evaluator.run_linear_probe(encoder)
+                        
+                        # Only rank 0 gets accuracy; others get None
+                        if rank == 0 and lda_accuracy is not None:
+                            elapsed_time = (time.time() - start_time) / 60
+                            print(f"Total time: {elapsed_time:.2f} minutes")
+                            wandb.log({"top-1 accuracy": lda_accuracy}, step=step)
+                    step += 1
+
+                    if grad_stats_encoder is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
                                     % (epoch + 1, itr,
-                                       grad_stats.first_layer,
-                                       grad_stats.last_layer,
-                                       grad_stats.min,
-                                       grad_stats.max))
-
+                                       grad_stats_encoder.first_layer,
+                                       grad_stats_encoder.last_layer,
+                                       grad_stats_encoder.min,
+                                       grad_stats_encoder.max))
+                   
+                        
+                        
+                        
+                        
             log_stats()
 
             assert not np.isnan(loss), 'loss is nan'
 
         # -- Save Checkpoint after every epoch
-        logger.info('avg. loss %.3f' % loss_meter.avg)
+        logger.info(
+            'Epoch %d Summary: avg. loss: %.3f'
+            % (epoch + 1, 
+               loss_meter.avg
+               )
+        )
+
         save_checkpoint(epoch+1)
 
 
 if __name__ == "__main__":
+    
     main()

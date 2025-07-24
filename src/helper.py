@@ -9,6 +9,8 @@ import logging
 import sys
 
 import torch
+import torch.optim as optim
+#from torchlars import LARS
 
 import src.models.vision_transformer as vit
 from src.utils.schedulers import (
@@ -116,7 +118,9 @@ def init_opt(
     final_wd=1e-6,
     final_lr=0.0,
     use_bfloat16=False,
-    ipe_scale=1.25
+    ipe_scale=1.25,
+    use_lars=False,
+    use_constant_wd=False
 ):
     param_groups = [
         {
@@ -138,19 +142,35 @@ def init_opt(
         }
     ]
 
-    logger.info('Using AdamW')
-    optimizer = torch.optim.AdamW(param_groups)
+    if use_lars:
+        logger.info('Using LARS Optimizer')
+        base_optimizer = optim.SGD(param_groups, lr=ref_lr, momentum=0.9, weight_decay=wd)
+        #optimizer = LARS(base_optimizer, trust_coef=0.001)
+    else:
+        logger.info('Using AdamW')
+        optimizer = optim.AdamW(param_groups, lr=ref_lr, weight_decay=wd)
+
     scheduler = WarmupCosineSchedule(
         optimizer,
-        warmup_steps=int(warmup*iterations_per_epoch),
+        warmup_steps=int(warmup * iterations_per_epoch),
         start_lr=start_lr,
         ref_lr=ref_lr,
         final_lr=final_lr,
-        T_max=int(ipe_scale*num_epochs*iterations_per_epoch))
-    wd_scheduler = CosineWDSchedule(
-        optimizer,
-        ref_wd=wd,
-        final_wd=final_wd,
-        T_max=int(ipe_scale*num_epochs*iterations_per_epoch))
+        T_max=int(ipe_scale * num_epochs * iterations_per_epoch)
+    )
+
+    if use_constant_wd:
+        logger.info('Using Constant Weight Decay')
+        wd_scheduler = None  # No scheduler, weight decay stays fixed
+    else:
+        logger.info('Using Cosine Weight Decay')
+        wd_scheduler = CosineWDSchedule(
+            optimizer,
+            ref_wd=wd,
+            final_wd=final_wd,
+            T_max=int(ipe_scale * num_epochs * iterations_per_epoch)
+        )
+
     scaler = torch.cuda.amp.GradScaler() if use_bfloat16 else None
     return optimizer, scaler, scheduler, wd_scheduler
+

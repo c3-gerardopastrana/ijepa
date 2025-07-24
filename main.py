@@ -12,7 +12,7 @@ import multiprocessing as mp
 import pprint
 import yaml
 
-from src.utils.distributed import init_distributed
+from src.utils.distributed import init_distributed, init_rpc
 from src.train import main as app_main
 
 parser = argparse.ArgumentParser()
@@ -63,3 +63,7 @@ if __name__ == '__main__':
             target=process_main,
             args=(rank, args.fname, num_gpus, args.devices)
         ).start()
+
+    # At the end of your main function
+    # if world_size > 1 and torch.distributed.rpc.is_initialized():
+    #     torch.distributed.rpc.shutdown()

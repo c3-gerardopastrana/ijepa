@@ -151,7 +151,7 @@ class ImageNetSubset(object):
             for line in rfile:
                 class_name = line.split('_')[0]
                 target = class_to_idx[class_name]
-                img = line.split('\n')[0]
+                img = line.split('_')[1].split('\n')[0].strip() #line.split('\n')[0]
                 new_samples.append(
                     (os.path.join(root, class_name, img), target)
                 )
